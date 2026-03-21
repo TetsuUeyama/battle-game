@@ -9,6 +9,7 @@ import { ATTACKS } from '@/GamePlay/FightGame/Config/AttackConfig';
 import type { AttackDef } from '@/GamePlay/FightGame/Config/AttackConfig';
 import type { FighterInput } from '@/GamePlay/FightGame/Core/InputHandler';
 import { STAGE_CONFIG } from '@/GamePlay/FightGame/Config/FighterConfig';
+import { getGroundHeight } from '@/GamePlay/FightGame/Stage/StageBuilder';
 
 export type FighterAction = 'idle' | 'walk_fwd' | 'walk_back' | 'strafe' | 'jump' | 'block' | 'attack' | 'hitstun' | 'knockdown' | 'grapple' | 'grappled' | 'bound';
 export type AttackPhase = 'startup' | 'active' | 'recovery';
@@ -103,7 +104,8 @@ export function createFighter(spawnX: number, spawnZ: number, facingAngle: numbe
 }
 
 export function isGrounded(f: FighterState): boolean {
-  return f.y <= STAGE_CONFIG.groundY + 0.001;
+  const ground = getGroundHeight(f.x, f.z);
+  return f.y <= ground + 0.001;
 }
 
 export function canAct(f: FighterState): boolean {
@@ -331,7 +333,7 @@ function startAttack(f: FighterState, attackName: string): void {
 }
 
 function applyGravity(f: FighterState, dt: number): void {
-  const ground = STAGE_CONFIG.groundY;
+  const ground = getGroundHeight(f.x, f.z);
   if (!isGrounded(f) || f.vy > 0) {
     f.vy -= f.stats.gravity * dt;
     f.y += f.vy * dt;
@@ -343,16 +345,23 @@ function applyGravity(f: FighterState, dt: number): void {
         f.currentMotion = null;
       }
     }
+  } else {
+    // Snap to terrain when walking on slopes
+    f.y = ground;
   }
 }
 
-/** Clamp fighter position to active battle zone (rectangular) */
+/** Clamp fighter position to active battle zone and snap to terrain */
 function clampToArena(f: FighterState): void {
   const zone = STAGE_CONFIG.activeZone;
   if (f.x > zone.halfX) f.x = zone.halfX;
   else if (f.x < -zone.halfX) f.x = -zone.halfX;
   if (f.z > zone.halfZ) f.z = zone.halfZ;
   else if (f.z < -zone.halfZ) f.z = -zone.halfZ;
+
+  // Snap to ground after position change to prevent sinking/floating
+  const ground = getGroundHeight(f.x, f.z);
+  if (f.y < ground) f.y = ground;
 }
 
 /**
@@ -387,6 +396,7 @@ export function applyHit(
       defender.action = 'hitstun';
       defender.x += kbX * 0.6;
       defender.z += kbZ * 0.6;
+      defender.y = getGroundHeight(defender.x, defender.z);
       clampToArena(defender);
       return true; // guard break counts as hit
     }
@@ -395,6 +405,7 @@ export function applyHit(
     defender.action = 'hitstun';
     defender.x += kbX * 0.3;
     defender.z += kbZ * 0.3;
+    defender.y = getGroundHeight(defender.x, defender.z);
     clampToArena(defender);
     return false;
   }
@@ -405,6 +416,7 @@ export function applyHit(
   defender.currentMotion = null;
   defender.x += kbX;
   defender.z += kbZ;
+  defender.y = getGroundHeight(defender.x, defender.z);
   clampToArena(defender);
   return true;
 }

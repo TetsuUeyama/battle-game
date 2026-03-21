@@ -39,21 +39,44 @@ export function updateScreenShake(camera: ArcRotateCamera, dt: number): void {
 }
 
 // ========================================================================
-// Hit Particle Burst
+// Hit Particle Burst (pooled)
 // ========================================================================
+
+const PARTICLE_POOL_SIZE = 12;
+let particlePool: ParticleSystem[] = [];
+let particlePoolScene: Scene | null = null;
+
+function getOrCreateParticlePool(scene: Scene): ParticleSystem[] {
+  if (particlePoolScene === scene && particlePool.length > 0) return particlePool;
+  particlePoolScene = scene;
+  particlePool = [];
+  for (let i = 0; i < PARTICLE_POOL_SIZE; i++) {
+    const ps = new ParticleSystem(`hitPS_${i}`, 30, scene);
+    ps.createPointEmitter(Vector3.Zero(), Vector3.Zero());
+    ps.emitRate = 0;
+    ps.gravity = new Vector3(0, -1.5, 0);
+    ps.blendMode = ParticleSystem.BLENDMODE_ADD;
+    ps.disposeOnStop = false;
+    particlePool.push(ps);
+  }
+  return particlePool;
+}
 
 export function createHitParticles(
   scene: Scene,
   position: Vector3,
   blocked: boolean,
 ): void {
-  const ps = new ParticleSystem('hitPS', 30, scene);
+  const pool = getOrCreateParticlePool(scene);
+  // Find an idle particle system
+  let ps = pool.find(p => !p.isStarted);
+  if (!ps) {
+    // All busy — skip this effect (cosmetic only)
+    return;
+  }
 
-  // Use a simple circle texture generated at runtime
-  ps.createPointEmitter(Vector3.Zero(), Vector3.Zero());
   ps.emitter = position.clone();
 
-  // Particle appearance
   ps.minSize = 0.01;
   ps.maxSize = blocked ? 0.03 : 0.05;
   ps.minLifeTime = 0.1;
@@ -69,17 +92,11 @@ export function createHitParticles(
     ps.colorDead = new Color4(0.5, 0.0, 0.0, 0);
   }
 
-  // Emit in a sphere burst
   ps.minEmitPower = 0.3;
   ps.maxEmitPower = blocked ? 0.6 : 1.2;
-  ps.emitRate = 0; // we use manual emit
-  ps.gravity = new Vector3(0, -1.5, 0);
-  ps.blendMode = ParticleSystem.BLENDMODE_ADD;
 
-  // Burst emit then stop
   ps.manualEmitCount = blocked ? 8 : 20;
   ps.targetStopDuration = 0.4;
-  ps.disposeOnStop = true;
 
   ps.start();
 }
@@ -90,11 +107,41 @@ export function createHitParticles(
 
 interface DamageNumber {
   mesh: ReturnType<typeof MeshBuilder.CreatePlane>;
+  mat: StandardMaterial;
+  tex: DynamicTexture;
   timer: number;
   startY: number;
+  active: boolean;
 }
 
-const activeDamageNumbers: DamageNumber[] = [];
+const DMG_POOL_SIZE = 16;
+const DAMAGE_NUMBER_DURATION = 0.8;
+let dmgPool: DamageNumber[] = [];
+let dmgPoolScene: Scene | null = null;
+
+function getOrCreateDmgPool(scene: Scene): DamageNumber[] {
+  if (dmgPoolScene === scene && dmgPool.length > 0) return dmgPool;
+  dmgPoolScene = scene;
+  dmgPool = [];
+  for (let i = 0; i < DMG_POOL_SIZE; i++) {
+    const plane = MeshBuilder.CreatePlane(`dmgNum_${i}`, { width: 0.15, height: 0.06 }, scene);
+    plane.billboardMode = 7;
+    plane.isPickable = false;
+    plane.setEnabled(false);
+
+    const mat = new StandardMaterial(`dmgMat_${i}`, scene);
+    mat.disableLighting = true;
+    mat.useAlphaFromDiffuseTexture = true;
+
+    const tex = new DynamicTexture(`dmgTex_${i}`, { width: 128, height: 48 }, scene, false);
+    mat.diffuseTexture = tex;
+    mat.opacityTexture = tex;
+    plane.material = mat;
+
+    dmgPool.push({ mesh: plane, mat, tex, timer: 0, startY: 0, active: false });
+  }
+  return dmgPool;
+}
 
 export function spawnDamageNumber(
   scene: Scene,
@@ -102,22 +149,24 @@ export function spawnDamageNumber(
   damage: number,
   blocked: boolean,
 ): void {
-  // Create a small plane with text texture
-  const plane = MeshBuilder.CreatePlane('dmgNum', { width: 0.15, height: 0.06 }, scene);
-  plane.position = position.clone();
-  plane.position.y += 0.05;
-  plane.billboardMode = 7; // all axes
+  const pool = getOrCreateDmgPool(scene);
+  const dn = pool.find(d => !d.active);
+  if (!dn) return; // pool exhausted — skip cosmetic
 
-  const mat = new StandardMaterial('dmgMat', scene);
-  mat.emissiveColor = blocked
+  dn.active = true;
+  dn.timer = 0;
+  dn.mesh.position.copyFrom(position);
+  dn.mesh.position.y += 0.05;
+  dn.startY = dn.mesh.position.y;
+  dn.mesh.scaling.setAll(1);
+  dn.mesh.setEnabled(true);
+
+  dn.mat.emissiveColor = blocked
     ? new Color3(0.3, 0.5, 1.0)
     : new Color3(1.0, 0.9, 0.2);
-  mat.disableLighting = true;
-  mat.alpha = 1;
+  dn.mat.alpha = 1;
 
-  // Create dynamic texture for damage text
-  const tex = new DynamicTexture('dmgTex', { width: 128, height: 48 }, scene, false);
-  const ctx = tex.getContext() as CanvasRenderingContext2D;
+  const ctx = dn.tex.getContext() as CanvasRenderingContext2D;
   ctx.clearRect(0, 0, 128, 48);
   ctx.font = 'bold 32px monospace';
   ctx.textAlign = 'center';
@@ -134,52 +183,43 @@ export function spawnDamageNumber(
     ctx.fillText(String(Math.round(damage)), 64, 24);
   }
 
-  tex.update();
-  mat.diffuseTexture = tex;
-  mat.opacityTexture = tex;
-  mat.useAlphaFromDiffuseTexture = true;
-  plane.material = mat;
-  plane.isPickable = false;
-
-  activeDamageNumbers.push({
-    mesh: plane,
-    timer: 0,
-    startY: plane.position.y,
-  });
+  dn.tex.update();
 }
 
-const DAMAGE_NUMBER_DURATION = 0.8;
-
 export function updateDamageNumbers(dt: number): void {
-  for (let i = activeDamageNumbers.length - 1; i >= 0; i--) {
-    const dn = activeDamageNumbers[i];
+  for (const dn of dmgPool) {
+    if (!dn.active) continue;
     dn.timer += dt;
 
-    // Float upward
     dn.mesh.position.y = dn.startY + dn.timer * 0.3;
 
-    // Fade out
     const t = dn.timer / DAMAGE_NUMBER_DURATION;
-    const mat = dn.mesh.material as StandardMaterial;
-    mat.alpha = Math.max(0, 1 - t);
+    dn.mat.alpha = Math.max(0, 1 - t);
 
-    // Scale: pop in then shrink
     const scale = t < 0.15 ? t / 0.15 * 1.3 : 1.3 - (t - 0.15) * 0.4;
     dn.mesh.scaling.setAll(Math.max(0.5, scale));
 
     if (dn.timer >= DAMAGE_NUMBER_DURATION) {
-      dn.mesh.dispose();
-      activeDamageNumbers.splice(i, 1);
+      dn.active = false;
+      dn.mesh.setEnabled(false);
     }
   }
 }
 
 /**
- * Dispose all active damage numbers (cleanup on scene destroy).
+ * Dispose all damage number pool (cleanup on scene destroy).
  */
 export function disposeAllEffects(): void {
-  for (const dn of activeDamageNumbers) {
+  for (const dn of dmgPool) {
     dn.mesh.dispose();
+    dn.mat.dispose();
+    dn.tex.dispose();
   }
-  activeDamageNumbers.length = 0;
+  dmgPool = [];
+  dmgPoolScene = null;
+  for (const ps of particlePool) {
+    ps.dispose();
+  }
+  particlePool = [];
+  particlePoolScene = null;
 }

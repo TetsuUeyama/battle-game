@@ -109,6 +109,16 @@ export class FighterMotionPlayer {
   private boneRestPos: Map<string, Vector3>;
   private voxelBodyHeight: number;
 
+  // Pre-allocated reusable objects for per-frame calculations
+  private readonly _worldDqs = new Map<string, Quaternion>();
+  private readonly _localRots = new Map<string, Quaternion>();
+  private readonly _restRots = new Map<string, Quaternion>();
+  private readonly _tempQuat = new Quaternion();
+  private readonly _tempInvQuat = new Quaternion();
+  private readonly _prevDp = new Vector3();
+  private readonly _currDp = new Vector3();
+  private readonly _overlayQuat = new Quaternion();
+
   constructor(
     nodes: Map<string, TransformNode>,
     boneRestPos: Map<string, Vector3>,
@@ -119,6 +129,13 @@ export class FighterMotionPlayer {
     this.boneRestPos = boneRestPos;
     this.voxelBodyHeight = voxelBodyHeight;
     this.gender = gender;
+
+    // Pre-populate maps with identity quaternions for each bone
+    for (const boneDef of BONE_DEFS) {
+      this._worldDqs.set(boneDef.name, new Quaternion());
+      this._localRots.set(boneDef.name, new Quaternion());
+      this._restRots.set(boneDef.name, Quaternion.Identity());
+    }
   }
 
   /**
@@ -317,35 +334,40 @@ export class FighterMotionPlayer {
       clip.frameCount - 1,
     );
     const frame = clip.frames[frameIndex];
-    if (!frame) return new Map();
+    if (!frame) return this._localRots;
 
-    // Compute world dqs
-    const worldDqs = new Map<string, Quaternion>();
+    // Compute world dqs (reuse pre-allocated map)
     for (const boneDef of BONE_DEFS) {
       const data = frame[boneDef.name];
-      worldDqs.set(boneDef.name, data ? threeQuatToViewer(data.dq) : Quaternion.Identity());
-    }
-
-    // Convert to local rotations
-    const localRots = new Map<string, Quaternion>();
-    for (const boneDef of BONE_DEFS) {
-      const worldDq = worldDqs.get(boneDef.name) ?? Quaternion.Identity();
-      if (boneDef.parent) {
-        const parentWorldDq = worldDqs.get(boneDef.parent) ?? Quaternion.Identity();
-        localRots.set(boneDef.name, Quaternion.Inverse(parentWorldDq).multiply(worldDq));
+      const target = this._worldDqs.get(boneDef.name)!;
+      if (data) {
+        const q = threeQuatToViewer(data.dq);
+        target.copyFrom(q);
       } else {
-        localRots.set(boneDef.name, worldDq);
+        target.copyFromFloats(0, 0, 0, 1); // Identity
       }
     }
-    return localRots;
+
+    // Convert to local rotations (reuse pre-allocated map)
+    for (const boneDef of BONE_DEFS) {
+      const worldDq = this._worldDqs.get(boneDef.name)!;
+      const localRot = this._localRots.get(boneDef.name)!;
+      if (boneDef.parent) {
+        const parentWorldDq = this._worldDqs.get(boneDef.parent)!;
+        // Compute inverse in-place then multiply
+        parentWorldDq.invertInPlace();
+        parentWorldDq.multiplyToRef(worldDq, localRot);
+        // Restore parentWorldDq (re-invert)
+        parentWorldDq.invertInPlace();
+      } else {
+        localRot.copyFrom(worldDq);
+      }
+    }
+    return this._localRots;
   }
 
   private getRestRotations(): Map<string, Quaternion> {
-    const rots = new Map<string, Quaternion>();
-    for (const boneDef of BONE_DEFS) {
-      rots.set(boneDef.name, Quaternion.Identity());
-    }
-    return rots;
+    return this._restRots;
   }
 
   private applyBlendedRotations(
@@ -359,7 +381,10 @@ export class FighterMotionPlayer {
 
       const fromQ = from.get(boneDef.name) ?? Quaternion.Identity();
       const toQ = to.get(boneDef.name) ?? Quaternion.Identity();
-      node.rotationQuaternion = Quaternion.Slerp(fromQ, toQ, t);
+      if (!node.rotationQuaternion) {
+        node.rotationQuaternion = new Quaternion();
+      }
+      Quaternion.SlerpToRef(fromQ, toQ, t, node.rotationQuaternion);
     }
   }
 
@@ -380,23 +405,33 @@ export class FighterMotionPlayer {
     const frame = clip.frames[frameIndex];
     if (!frame) return;
 
-    // World dqs
-    const worldDqs = new Map<string, Quaternion>();
+    // World dqs (reuse pre-allocated map)
     for (const boneDef of BONE_DEFS) {
       const data = frame[boneDef.name];
-      worldDqs.set(boneDef.name, data ? threeQuatToViewer(data.dq) : Quaternion.Identity());
+      const target = this._worldDqs.get(boneDef.name)!;
+      if (data) {
+        const q = threeQuatToViewer(data.dq);
+        target.copyFrom(q);
+      } else {
+        target.copyFromFloats(0, 0, 0, 1);
+      }
     }
 
     // Apply local rotations
     for (const boneDef of BONE_DEFS) {
       const node = this.nodes.get(boneDef.name);
       if (!node) continue;
-      const worldDq = worldDqs.get(boneDef.name) ?? Quaternion.Identity();
+      const worldDq = this._worldDqs.get(boneDef.name)!;
+      if (!node.rotationQuaternion) {
+        node.rotationQuaternion = new Quaternion();
+      }
       if (boneDef.parent) {
-        const parentWorldDq = worldDqs.get(boneDef.parent) ?? Quaternion.Identity();
-        node.rotationQuaternion = Quaternion.Inverse(parentWorldDq).multiply(worldDq);
+        const parentWorldDq = this._worldDqs.get(boneDef.parent)!;
+        parentWorldDq.invertInPlace();
+        parentWorldDq.multiplyToRef(worldDq, node.rotationQuaternion);
+        parentWorldDq.invertInPlace();
       } else {
-        node.rotationQuaternion = worldDq;
+        node.rotationQuaternion.copyFrom(worldDq);
       }
     }
 
@@ -447,7 +482,7 @@ export class FighterMotionPlayer {
     const hipsNode = this.nodes.get('Hips');
     if (!hipsNode) return;
 
-    const getHipsDp = (active: ActiveMotion): Vector3 => {
+    const fillHipsDp = (active: ActiveMotion, out: Vector3): void => {
       const clip = active.clip;
       const sf = clip.fbxBodyHeight > 0 ? this.voxelBodyHeight / clip.fbxBodyHeight : 1;
       const fd = 1.0 / clip.fps;
@@ -457,24 +492,28 @@ export class FighterMotionPlayer {
       const frame = clip.frames[fi];
       const hd = frame?.['Hips'];
       if (hd?.dp) {
-        return new Vector3((-hd.dp[0]) * sf, hd.dp[1] * sf, hd.dp[2] * sf);
+        out.set((-hd.dp[0]) * sf, hd.dp[1] * sf, hd.dp[2] * sf);
+      } else {
+        out.set(0, 0, 0);
       }
-      return Vector3.Zero();
     };
 
-    const prevDp = getHipsDp(prev);
-    const currDp = getHipsDp(curr);
-    const blended = Vector3.Lerp(prevDp, currDp, t);
-    hipsNode.position.x = voxelHipsPos.x + blended.x;
-    hipsNode.position.y = voxelHipsPos.y + blended.y;
-    hipsNode.position.z = voxelHipsPos.z + blended.z;
+    fillHipsDp(prev, this._prevDp);
+    fillHipsDp(curr, this._currDp);
+    const it = 1 - t;
+    hipsNode.position.x = voxelHipsPos.x + this._prevDp.x * it + this._currDp.x * t;
+    hipsNode.position.y = voxelHipsPos.y + this._prevDp.y * it + this._currDp.y * t;
+    hipsNode.position.z = voxelHipsPos.z + this._prevDp.z * it + this._currDp.z * t;
   }
 
   private applyRestPose(): void {
     for (const boneDef of BONE_DEFS) {
       const node = this.nodes.get(boneDef.name);
       if (!node) continue;
-      node.rotationQuaternion = Quaternion.Identity();
+      if (!node.rotationQuaternion) {
+        node.rotationQuaternion = new Quaternion();
+      }
+      node.rotationQuaternion.copyFromFloats(0, 0, 0, 1);
       if (!boneDef.parent) {
         const rest = this.boneRestPos.get(boneDef.name);
         if (rest) node.position.copyFrom(rest);
@@ -482,7 +521,11 @@ export class FighterMotionPlayer {
         const bonePos = this.boneRestPos.get(boneDef.name);
         const parentPos = this.boneRestPos.get(boneDef.parent);
         if (bonePos && parentPos) {
-          node.position = bonePos.subtract(parentPos);
+          node.position.set(
+            bonePos.x - parentPos.x,
+            bonePos.y - parentPos.y,
+            bonePos.z - parentPos.z,
+          );
         }
       }
     }
@@ -521,9 +564,10 @@ export class FighterMotionPlayer {
       const rollZ = twist.spineRollZ * w * eased;
 
       // Create overlay rotation: lean forward (X), twist (Y), side lean (Z)
-      const overlay = Quaternion.RotationYawPitchRoll(twistY, leanX, rollZ);
-      const current = node.rotationQuaternion ?? Quaternion.Identity();
-      node.rotationQuaternion = current.multiply(overlay);
+      Quaternion.RotationYawPitchRollToRef(twistY, leanX, rollZ, this._overlayQuat);
+      if (node.rotationQuaternion) {
+        node.rotationQuaternion.multiplyInPlace(this._overlayQuat);
+      }
     }
 
     // Apply twist to Hips
@@ -532,9 +576,10 @@ export class FighterMotionPlayer {
       const hipTwistY = twist.hipsTwistY * eased;
       const hipLeanX = twist.hipsForwardX * eased;
       const hipRollZ = twist.hipsRollZ * eased;
-      const overlay = Quaternion.RotationYawPitchRoll(hipTwistY, hipLeanX, hipRollZ);
-      const current = hipsNode.rotationQuaternion ?? Quaternion.Identity();
-      hipsNode.rotationQuaternion = current.multiply(overlay);
+      Quaternion.RotationYawPitchRollToRef(hipTwistY, hipLeanX, hipRollZ, this._overlayQuat);
+      if (hipsNode.rotationQuaternion) {
+        hipsNode.rotationQuaternion.multiplyInPlace(this._overlayQuat);
+      }
     }
   }
 }

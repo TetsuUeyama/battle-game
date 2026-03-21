@@ -23,7 +23,7 @@ export interface MotionDef {
 const GENDER_ACTION_OVERRIDES: Record<CharacterGender, Record<string, MotionDef>> = {
   male: {
     idle: {
-      file: '/models/character-motion/Idle.motion.json',
+      file: '/api/game-assets/motion/Idle.motion.json',
       loop: true,
       speed: 1.0,
       blendIn: 0.2,
@@ -31,7 +31,7 @@ const GENDER_ACTION_OVERRIDES: Record<CharacterGender, Record<string, MotionDef>
   },
   female: {
     idle: {
-      file: '/models/character-motion/Angry.motion.json',
+      file: '/api/game-assets/motion/Angry.motion.json',
       loop: true,
       speed: 1.0,
       blendIn: 0.2,
@@ -69,7 +69,7 @@ export const ACTION_MOTIONS: Record<string, MotionDef> = {
     blendIn: 0.15,
   },
   jump: {
-    file: '/models/character-motion/Jump.motion.json',
+    file: '/api/game-assets/motion/Jump.motion.json',
     loop: false,
     speed: 1.0,
     blendIn: 0.1,
@@ -87,38 +87,38 @@ export const ACTION_MOTIONS: Record<string, MotionDef> = {
     blendIn: 0.05,
   },
   knockdown: {
-    file: '/models/character-motion/brutal_assassination.motion.json',
+    file: '/api/game-assets/motion/brutal_assassination.motion.json',
     loop: false,
     speed: 1.0,
     blendIn: 0.1,
   },
   knockdown_fwd: {
-    file: '/models/character-motion/brutal_assassination.motion.json',
+    file: '/api/game-assets/motion/brutal_assassination.motion.json',
     loop: false,
     speed: 1.0,
     blendIn: 0.1,
   },
   knockdown_electrocuted: {
-    file: '/models/character-motion/being_electrocuted.motion.json',
+    file: '/api/game-assets/motion/being_electrocuted.motion.json',
     loop: false,
     speed: 1.0,
     blendIn: 0.1,
   },
   // Bound (vine restrain)
   bound: {
-    file: '/models/character-motion/being_electrocuted.motion.json',
+    file: '/api/game-assets/motion/being_electrocuted.motion.json',
     loop: true,
     speed: 0.5,
     blendIn: 0.1,
   },
   // Grapple attacker motions (selected dynamically by grapple name)
   grapple: { file: null, loop: false, speed: 1.0, blendIn: 0.1 },
-  grapple_takedown_atk: { file: '/models/character-motion/takedown_atk.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
-  grapple_hip_throw_atk: { file: '/models/character-motion/hip_throw_atk.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
+  grapple_takedown_atk: { file: '/api/game-assets/motion/takedown_atk.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
+  grapple_hip_throw_atk: { file: '/api/game-assets/motion/hip_throw_atk.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
   // Grapple defender motions
   grappled: { file: null, loop: false, speed: 1.0, blendIn: 0.1 },
-  grapple_takedown_def: { file: '/models/character-motion/takedown_def.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
-  grapple_hip_throw_def: { file: '/models/character-motion/hip_throw_def.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
+  grapple_takedown_def: { file: '/api/game-assets/motion/takedown_def.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
+  grapple_hip_throw_def: { file: '/api/game-assets/motion/hip_throw_def.motion.json', loop: false, speed: 1.0, blendIn: 0.1 },
 };
 
 /**
@@ -127,26 +127,26 @@ export const ACTION_MOTIONS: Record<string, MotionDef> = {
  */
 export const ATTACK_MOTIONS: Record<string, MotionDef> = {
   // Right punches
-  r_punch_upper: { file: '/models/character-motion/right_punch_upper.motion.json', loop: false, speed: 1.3, blendIn: 0.04 },
-  r_punch_mid:   { file: '/models/character-motion/right_punch_mid.motion.json',   loop: false, speed: 1.4, blendIn: 0.03 },
-  r_punch_lower: { file: '/models/character-motion/right_punch_lower.motion.json', loop: false, speed: 1.3, blendIn: 0.04 },
+  r_punch_upper: { file: '/api/game-assets/motion/right_punch_upper.motion.json', loop: false, speed: 1.3, blendIn: 0.04 },
+  r_punch_mid:   { file: '/api/game-assets/motion/right_punch_mid.motion.json',   loop: false, speed: 1.4, blendIn: 0.03 },
+  r_punch_lower: { file: '/api/game-assets/motion/right_punch_lower.motion.json', loop: false, speed: 1.3, blendIn: 0.04 },
   // Left punches
-  l_punch_upper: { file: '/models/character-motion/left_punch_upper.motion.json', loop: false, speed: 1.2, blendIn: 0.04 },
-  l_punch_mid:   { file: '/models/character-motion/left_punch_mid.motion.json',   loop: false, speed: 1.3, blendIn: 0.04 },
-  l_punch_lower: { file: '/models/character-motion/left_punch_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.04 },
+  l_punch_upper: { file: '/api/game-assets/motion/left_punch_upper.motion.json', loop: false, speed: 1.2, blendIn: 0.04 },
+  l_punch_mid:   { file: '/api/game-assets/motion/left_punch_mid.motion.json',   loop: false, speed: 1.3, blendIn: 0.04 },
+  l_punch_lower: { file: '/api/game-assets/motion/left_punch_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.04 },
   // Right kicks
-  r_kick_upper: { file: '/models/character-motion/right_kick_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
-  r_kick_mid:   { file: '/models/character-motion/right_kick_mid.motion.json',   loop: false, speed: 1.1, blendIn: 0.05 },
-  r_kick_lower: { file: '/models/character-motion/right_kick_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.05 },
+  r_kick_upper: { file: '/api/game-assets/motion/right_kick_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
+  r_kick_mid:   { file: '/api/game-assets/motion/right_kick_mid.motion.json',   loop: false, speed: 1.1, blendIn: 0.05 },
+  r_kick_lower: { file: '/api/game-assets/motion/right_kick_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.05 },
   // Left kicks
-  l_kick_upper: { file: '/models/character-motion/left_kick_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
-  l_kick_mid:   { file: '/models/character-motion/left_kick_mid.motion.json',   loop: false, speed: 1.1, blendIn: 0.05 },
-  l_kick_lower: { file: '/models/character-motion/left_kick_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.05 },
+  l_kick_upper: { file: '/api/game-assets/motion/left_kick_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
+  l_kick_mid:   { file: '/api/game-assets/motion/left_kick_mid.motion.json',   loop: false, speed: 1.1, blendIn: 0.05 },
+  l_kick_lower: { file: '/api/game-assets/motion/left_kick_lower.motion.json', loop: false, speed: 1.2, blendIn: 0.05 },
   // Projectile attacks
-  energy_ball: { file: '/models/character-motion/right_punch_mid.motion.json', loop: false, speed: 3.0, blendIn: 0.02 },
-  thunder_bolt: { file: '/models/character-motion/right_punch_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
+  energy_ball: { file: '/api/game-assets/motion/right_punch_mid.motion.json', loop: false, speed: 3.0, blendIn: 0.02 },
+  thunder_bolt: { file: '/api/game-assets/motion/right_punch_upper.motion.json', loop: false, speed: 1.0, blendIn: 0.06 },
   // Vine whip
-  vine_whip: { file: '/models/character-motion/right_punch_upper.motion.json', loop: false, speed: 0.7, blendIn: 0.06 },
+  vine_whip: { file: '/api/game-assets/motion/right_punch_upper.motion.json', loop: false, speed: 0.7, blendIn: 0.06 },
 };
 
 /**

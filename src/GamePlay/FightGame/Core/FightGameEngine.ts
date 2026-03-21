@@ -124,6 +124,12 @@ export class FightGameEngine {
   private team2: TeamFighter[] = [];
   private projectiles: ProjectileSystem | null = null;
 
+  // Pre-allocated arrays for projectile hit detection (avoids per-frame allocation)
+  private _t1Nodes: Map<string, TransformNode>[] = [];
+  private _t2Nodes: Map<string, TransformNode>[] = [];
+  private _t1Alive: boolean[] = [];
+  private _t2Alive: boolean[] = [];
+
   private phase: 'menu' | 'intro' | 'fight' | 'ko' | 'result' = 'menu';
   private phaseTimer = 0;
   private timer = STAGE_CONFIG.roundTime;
@@ -215,8 +221,10 @@ export class FightGameEngine {
     this.phaseTimer = 0;
 
     this.lastTime = performance.now();
-    this.scene.registerBeforeRender(() => this.gameLoop());
-    this.engine.runRenderLoop(() => this.scene.render());
+    this.engine.runRenderLoop(() => {
+      this.gameLoop();
+      this.scene.render();
+    });
   }
 
   setUICallback(cb: (state: FightUIState) => void): void {
@@ -272,8 +280,10 @@ export class FightGameEngine {
     this.camera.target.set(0, 1, 0);
 
     this.lastTime = performance.now();
-    this.scene.registerBeforeRender(() => this.gameLoop());
-    this.engine.runRenderLoop(() => this.scene.render());
+    this.engine.runRenderLoop(() => {
+      this.gameLoop();
+      this.scene.render();
+    });
   }
 
   /** Training: execute attack from attacker on dummy */
@@ -657,11 +667,20 @@ export class FightGameEngine {
 
     // === Projectile hit detection ===
     if (this.projectiles) {
-      const t1Nodes = this.team1.map(tf => tf.nodes);
-      const t2Nodes = this.team2.map(tf => tf.nodes);
-      const t1Alive = this.team1.map(tf => tf.alive);
-      const t2Alive = this.team2.map(tf => tf.alive);
-      const projHits = this.projectiles.updateTeams(dt, t1Nodes, t2Nodes, t1Alive, t2Alive);
+      // Update pre-allocated arrays in-place
+      for (let i = 0; i < this.team1.length; i++) {
+        this._t1Nodes[i] = this.team1[i].nodes;
+        this._t1Alive[i] = this.team1[i].alive;
+      }
+      this._t1Nodes.length = this.team1.length;
+      this._t1Alive.length = this.team1.length;
+      for (let i = 0; i < this.team2.length; i++) {
+        this._t2Nodes[i] = this.team2[i].nodes;
+        this._t2Alive[i] = this.team2[i].alive;
+      }
+      this._t2Nodes.length = this.team2.length;
+      this._t2Alive.length = this.team2.length;
+      const projHits = this.projectiles.updateTeams(dt, this._t1Nodes, this._t2Nodes, this._t1Alive, this._t2Alive);
       for (const hit of projHits) {
         const defTeam = hit.defenderTeam === 1 ? this.team1 : this.team2;
         const defender = defTeam[hit.defenderIndex];
