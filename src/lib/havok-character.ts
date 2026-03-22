@@ -65,6 +65,10 @@ export interface HavokCharacter {
   ikChains: { leftArm: IKChain; rightArm: IKChain; leftLeg: IKChain; rightLeg: IKChain };
   /** Foot planting */
   footPlant: { leftLocked: Vector3 | null; rightLocked: Vector3 | null };
+  /** IK base rotations (instance-level) */
+  ikBaseRotations: Map<string, { root: Quaternion; mid: Quaternion }>;
+  /** Initial foot Y positions (for scaling) */
+  initialFootY: { left: number; right: number };
   /** Debug */
   debug: DebugVisuals;
 }
@@ -357,84 +361,165 @@ function distanceBetweenBones(a: TransformNode, b: TransformNode): number {
 
 /**
  * Analytic 2-bone IK solver operating on TransformNodes.
- * Sets local rotations on chain.root and chain.mid to reach target.
+ *
+ * Algorithm:
+ * 1. Compute desired mid-joint position using law of cosines + pole vector
+ * 2. Compute world rotations for root and mid joints
+ * 3. Convert to local rotations relative to parents
+ *
+ * Stores original rotations on first call so we can blend with IK weight.
  */
-export function solveIK2Bone(chain: IKChain): void {
+let _ikDebugCounter = 0;
+
+export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
   if (chain.weight <= 0) return;
 
   const { root, mid, end, lengthA, lengthB, target, poleHint } = chain;
 
-  // World positions
-  const rootPos = getWorldPos(root);
-  const midPos = getWorldPos(mid);
-  const endPos = getWorldPos(end);
+  // Store base rotations on first call (instance-level)
+  const chainKey = root.name;
+  const baseMap = character.ikBaseRotations;
+  if (!baseMap.has(chainKey)) {
+    baseMap.set(chainKey, {
+      root: (root.rotationQuaternion ?? Quaternion.Identity()).clone(),
+      mid: (mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
+    });
+  }
+  const baseRots = baseMap.get(chainKey)!;
 
-  // Direction and distance to target
+  // Reset to base rotations before solving (prevents accumulation)
+  root.rotationQuaternion = baseRots.root.clone();
+  mid.rotationQuaternion = baseRots.mid.clone();
+
+  // Recompute world matrices after reset
+  root.computeWorldMatrix(true);
+  mid.computeWorldMatrix(true);
+  end.computeWorldMatrix(true);
+
+  // Current world positions
+  const rootPos = root.getAbsolutePosition().clone();
+  const midPos = mid.getAbsolutePosition().clone();
+  const endPos = end.getAbsolutePosition().clone();
+
+  // Distance to target
   const toTarget = target.subtract(rootPos);
-  let dist = toTarget.length();
+  let targetDist = toTarget.length();
+  if (targetDist < 0.001) return;
 
   // Clamp to reachable range
   const maxReach = lengthA + lengthB - 0.001;
   const minReach = Math.abs(lengthA - lengthB) + 0.001;
-  dist = Math.max(minReach, Math.min(maxReach, dist));
+  targetDist = Math.max(minReach, Math.min(maxReach, targetDist));
 
-  // Law of cosines: angle at root joint
-  const cosAngleRoot = (lengthA * lengthA + dist * dist - lengthB * lengthB) / (2 * lengthA * dist);
-  const angleRoot = Math.acos(Math.max(-1, Math.min(1, cosAngleRoot)));
+  // ─── Step 1: Find desired mid-joint position ───
 
-  // Law of cosines: angle at mid joint
-  const cosAngleMid = (lengthA * lengthA + lengthB * lengthB - dist * dist) / (2 * lengthA * lengthB);
-  const angleMid = Math.acos(Math.max(-1, Math.min(1, cosAngleMid)));
+  // Law of cosines: angle at root
+  const cosA = (lengthA * lengthA + targetDist * targetDist - lengthB * lengthB)
+    / (2 * lengthA * targetDist);
+  const angleA = Math.acos(Math.max(-1, Math.min(1, cosA)));
 
-  // Build rotation for root joint:
-  // 1. Direction toward target
+  // Direction from root to target
   const targetDir = toTarget.normalize();
 
-  // 2. Bend plane from pole hint
-  // Project pole hint onto plane perpendicular to targetDir
-  const poleDir = poleHint.subtract(rootPos);
-  const poleDotTarget = Vector3.Dot(poleDir, targetDir);
-  const poleOnPlane = poleDir.subtract(targetDir.scale(poleDotTarget)).normalize();
+  // Pole vector: defines the bend plane
+  // Project poleHint onto the plane perpendicular to targetDir
+  const poleDot = Vector3.Dot(poleHint, targetDir);
+  let bendDir = poleHint.subtract(targetDir.scale(poleDot));
+  if (bendDir.length() < 0.001) {
+    // Fallback: use current mid position to determine bend plane
+    const currentBend = midPos.subtract(rootPos);
+    const cd = Vector3.Dot(currentBend, targetDir);
+    bendDir = currentBend.subtract(targetDir.scale(cd));
+  }
+  bendDir.normalize();
 
-  // 3. Root rotation: rotate toward target, then bend by angleRoot in pole plane
-  const bendAxis = Vector3.Cross(targetDir, poleOnPlane).normalize();
-  const rootWorldRot = Quaternion.RotationAxis(bendAxis, -angleRoot)
-    .multiply(Quaternion.FromLookDirectionLH(targetDir, poleOnPlane));
+  // Desired mid position: rotate targetDir by angleA toward bendDir
+  const desiredMid = rootPos
+    .add(targetDir.scale(Math.cos(angleA) * lengthA))
+    .add(bendDir.scale(Math.sin(angleA) * lengthA));
 
-  // 4. Mid rotation: bend by (PI - angleMid) around the local X axis
-  const midBendAngle = Math.PI - angleMid;
+  // ─── Step 2: Rotate root joint to point at desiredMid ───
 
-  // Convert world rotation to local rotation for root
-  const rootParent = root.parent as TransformNode;
-  if (rootParent) {
-    rootParent.computeWorldMatrix(true);
-    const parentWorldMat = rootParent.getWorldMatrix();
-    const parentWorldRot = Quaternion.FromRotationMatrix(parentWorldMat.getRotationMatrix());
-    const parentInv = parentWorldRot.clone();
-    parentInv.invertInPlace();
+  // Current direction from root to mid (before IK)
+  const currentRootToMid = midPos.subtract(rootPos).normalize();
+  // Desired direction from root to desiredMid
+  const desiredRootToMid = desiredMid.subtract(rootPos).normalize();
 
-    const localRot = parentInv.multiply(rootWorldRot);
-    if (chain.weight >= 1) {
-      root.rotationQuaternion = localRot;
-    } else {
-      root.rotationQuaternion = Quaternion.Slerp(
-        root.rotationQuaternion ?? Quaternion.Identity(),
-        localRot,
-        chain.weight,
-      );
-    }
+  // Rotation from current to desired (in world space)
+  const rootDeltaWorld = rotationBetweenVectors(currentRootToMid, desiredRootToMid);
+
+  if (!(_ikDebugCounter % 120)) {
+    console.log(`[IK ${root.name}] rootPos=${rootPos.toString()} target=${target.toString()} dist=${targetDist.toFixed(3)}`);
   }
 
-  // Set mid joint local rotation (bend around local X)
-  const midLocalRot = Quaternion.RotationAxis(Vector3.Right(), midBendAngle);
-  if (chain.weight >= 1) {
-    mid.rotationQuaternion = midLocalRot;
+  // Apply delta rotation to root in local space
+  applyWorldDeltaRotation(root, rootDeltaWorld, chain.weight);
+
+  // Recompute after root rotation
+  root.computeWorldMatrix(true);
+  mid.computeWorldMatrix(true);
+  end.computeWorldMatrix(true);
+
+  // ─── Step 3: Rotate mid joint to point end at target ───
+
+  const newMidPos = mid.getAbsolutePosition().clone();
+  const newEndPos = end.getAbsolutePosition().clone();
+
+  const currentMidToEnd = newEndPos.subtract(newMidPos).normalize();
+  const desiredMidToEnd = target.subtract(newMidPos).normalize();
+
+  const midDeltaWorld = rotationBetweenVectors(currentMidToEnd, desiredMidToEnd);
+  applyWorldDeltaRotation(mid, midDeltaWorld, chain.weight);
+
+  if (!(_ikDebugCounter % 60)) {
+    // Check result
+    mid.computeWorldMatrix(true);
+    end.computeWorldMatrix(true);
+    const finalEnd = end.getAbsolutePosition();
+    console.log(`[IK ${root.name}] finalEnd=${finalEnd.toString()} target=${target.toString()} error=${Vector3.Distance(finalEnd, target).toFixed(4)}`);
+  }
+  _ikDebugCounter++;
+}
+
+/** Compute shortest rotation quaternion from direction A to direction B */
+function rotationBetweenVectors(from: Vector3, to: Vector3): Quaternion {
+  const dot = Vector3.Dot(from, to);
+  if (dot > 0.9999) return Quaternion.Identity();
+  if (dot < -0.9999) {
+    // 180° rotation: find perpendicular axis
+    let perp = Vector3.Cross(from, Vector3.Right());
+    if (perp.length() < 0.001) perp = Vector3.Cross(from, Vector3.Up());
+    perp.normalize();
+    return Quaternion.RotationAxis(perp, Math.PI);
+  }
+  const axis = Vector3.Cross(from, to).normalize();
+  const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
+  return Quaternion.RotationAxis(axis, angle);
+}
+
+/** Apply a world-space delta rotation to a node's local rotation */
+function applyWorldDeltaRotation(node: TransformNode, deltaWorld: Quaternion, weight: number): void {
+  // Get parent's world rotation
+  const parent = node.parent as TransformNode;
+  if (!parent) return;
+  parent.computeWorldMatrix(true);
+  const parentWorldRot = Quaternion.FromRotationMatrix(
+    parent.getWorldMatrix().getRotationMatrix(),
+  );
+  const parentInv = parentWorldRot.clone();
+  parentInv.invertInPlace();
+
+  // Convert world delta to local delta: localDelta = parentInv * worldDelta * parentRot
+  const localDelta = parentInv.multiply(deltaWorld).multiply(parentWorldRot);
+
+  // Apply to current local rotation
+  const currentLocal = node.rotationQuaternion ?? Quaternion.Identity();
+  const newLocal = localDelta.multiply(currentLocal);
+
+  if (weight >= 1) {
+    node.rotationQuaternion = newLocal;
   } else {
-    mid.rotationQuaternion = Quaternion.Slerp(
-      mid.rotationQuaternion ?? Quaternion.Identity(),
-      midLocalRot,
-      chain.weight,
-    );
+    node.rotationQuaternion = Quaternion.Slerp(currentLocal, newLocal, weight);
   }
 }
 
@@ -458,7 +543,7 @@ function createIKChains(
       lengthA: distanceBetweenBones(r, m),
       lengthB: distanceBetweenBones(m, e),
       poleHint: pole,
-      target: getWorldPos(e), // initial target = current position
+      target: getWorldPos(e).clone(), // MUST clone — getAbsolutePosition returns internal reference
       weight: 0, // off by default
     };
   }
@@ -506,43 +591,37 @@ export function getBalanceDeviation(com: Vector3, leftFoot: Vector3, rightFoot: 
 
 // ─── Foot Planting ───────────────────────────────────────
 
-function updateFootPlanting(
-  scene: Scene,
-  character: HavokCharacter,
-): void {
+/**
+ * Initialize foot plant targets from current T-pose foot positions.
+ * Called once after character creation. Targets are fixed to ground.
+ */
+export function initFootPlanting(character: HavokCharacter, boneData: BoneDataFile): void {
   const chains = character.ikChains;
   const fp = character.footPlant;
 
-  // Simple ground planting: raycast down from hip area, place feet
-  for (const side of ['left', 'right'] as const) {
-    const legChain = side === 'left' ? chains.leftLeg : chains.rightLeg;
-    const hipPos = getWorldPos(legChain.root);
+  // Use bone-data.json worldPosition directly (reliable, no runtime matrix issues)
+  const rootOffset = character.root.position;
+  const lFootEntry = boneData.bones.find(b => b.name === 'mixamorig:LeftFoot');
+  const rFootEntry = boneData.bones.find(b => b.name === 'mixamorig:RightFoot');
 
-    // Raycast down from hip
-    const ray = new Ray(new Vector3(hipPos.x, hipPos.y + 0.5, hipPos.z), Vector3.Down(), 3);
-    const hit = scene.pickWithRay(ray, (m) => m.name === 'ground' || m.name === 'arena');
+  const lFootY = lFootEntry ? lFootEntry.worldPosition[1] : 0.10;
+  const rFootY = rFootEntry ? rFootEntry.worldPosition[1] : 0.10;
+  const lFootX = lFootEntry ? lFootEntry.worldPosition[0] + rootOffset.x : rootOffset.x;
+  const lFootZ = lFootEntry ? lFootEntry.worldPosition[2] + rootOffset.z : rootOffset.z;
+  const rFootX = rFootEntry ? rFootEntry.worldPosition[0] + rootOffset.x : rootOffset.x;
+  const rFootZ = rFootEntry ? rFootEntry.worldPosition[2] + rootOffset.z : rootOffset.z;
 
-    const groundY = hit?.pickedPoint?.y ?? 0;
-    const ankleHeight = 0.105; // approximate ankle height from bone data
+  character.initialFootY = { left: lFootY, right: rFootY };
 
-    // Set IK target to ground + ankle offset
-    const footTarget = new Vector3(hipPos.x, groundY + ankleHeight, hipPos.z);
+  fp.leftLocked = new Vector3(lFootX, lFootY, lFootZ);
+  fp.rightLocked = new Vector3(rFootX, rFootY, rFootZ);
 
-    // Foot locking: keep planted position
-    const lockKey = side === 'left' ? 'leftLocked' : 'rightLocked';
-    if (fp[lockKey]) {
-      // Keep locked position, only adjust Y
-      footTarget.x = fp[lockKey]!.x;
-      footTarget.z = fp[lockKey]!.z;
-      footTarget.y = groundY + ankleHeight;
-    } else {
-      // Plant foot
-      fp[lockKey] = footTarget.clone();
-    }
+  chains.leftLeg.target.copyFrom(fp.leftLocked);
+  chains.rightLeg.target.copyFrom(fp.rightLocked);
+  chains.leftLeg.weight = 1;
+  chains.rightLeg.weight = 1;
 
-    legChain.target.copyFrom(footTarget);
-    legChain.weight = 1;
-  }
+  console.log(`[initFootPlanting] L target=${fp.leftLocked.toString()} R target=${fp.rightLocked.toString()}`);
 }
 
 // ─── Debug Visuals ───────────────────────────────────────
@@ -649,12 +728,21 @@ export async function createHavokCharacter(
   };
   if (!enableDebug) debug.comSphere.isVisible = false;
 
-  return {
+  const character: HavokCharacter = {
     root, allBones, combatBones, bodyMeshes,
     weaponAttachR, weaponAttachL,
     physicsBody, physicsMesh,
     ikChains, footPlant, debug,
+    ikBaseRotations: new Map(),
+    initialFootY: { left: 0, right: 0 },
   };
+
+  _ikDebugCounter = 0;
+
+  // Initialize foot planting (uses bone-data.json worldPositions for reliable targets)
+  initFootPlanting(character, boneData);
+
+  return character;
 }
 
 // ─── Bone Scaling ────────────────────────────────────────
@@ -686,6 +774,36 @@ export function scaleBones(character: HavokCharacter, factor: number): void {
       bone.position.set(basePos.x * factor, basePos.y * factor, basePos.z * factor);
     }
   }
+
+  // Update IK targets proportionally
+  const initFY = character.initialFootY;
+  const chains = character.ikChains;
+  const fp = character.footPlant;
+
+  // Recompute foot positions after scaling
+  character.root.computeWorldMatrix(true);
+  for (const bone of character.allBones.values()) bone.computeWorldMatrix(true);
+
+  const lFoot = chains.leftLeg.end.getAbsolutePosition();
+  const rFoot = chains.rightLeg.end.getAbsolutePosition();
+
+  // Target: use scaled foot Y (ankle height scales with character)
+  fp.leftLocked = new Vector3(lFoot.x, initFY.left * factor, lFoot.z);
+  fp.rightLocked = new Vector3(rFoot.x, initFY.right * factor, rFoot.z);
+  chains.leftLeg.target.copyFrom(fp.leftLocked);
+  chains.rightLeg.target.copyFrom(fp.rightLocked);
+
+  // Update IK chain lengths (bone lengths changed with scale)
+  for (const chain of [chains.leftLeg, chains.rightLeg, chains.leftArm, chains.rightArm]) {
+    chain.root.computeWorldMatrix(true);
+    chain.mid.computeWorldMatrix(true);
+    chain.end.computeWorldMatrix(true);
+    chain.lengthA = Vector3.Distance(chain.root.getAbsolutePosition(), chain.mid.getAbsolutePosition());
+    chain.lengthB = Vector3.Distance(chain.mid.getAbsolutePosition(), chain.end.getAbsolutePosition());
+  }
+
+  // Clear IK base rotations (bone orientations need re-capture)
+  character.ikBaseRotations.clear();
 }
 
 /**
@@ -711,10 +829,13 @@ export function rebuildBodyMeshes(
 // ─── Per-Frame Update ────────────────────────────────────
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter): void {
-  // IK and foot planting disabled for initial skeleton verification.
-  // TODO: enable after confirming T-pose is correct.
-  // updateFootPlanting(scene, character);
-  // solveIK2Bone(chains.leftLeg); etc.
+  // Solve leg IK (foot planting targets set once via initFootPlanting)
+  const chains = character.ikChains;
+  solveIK2Bone(chains.leftLeg, character);
+  solveIK2Bone(chains.rightLeg, character);
+  // Arm IK only when targets are set (weight > 0)
+  solveIK2Bone(chains.leftArm, character);
+  solveIK2Bone(chains.rightArm, character);
 
   // Center of mass
   const com = calculateCenterOfMass(character.combatBones);

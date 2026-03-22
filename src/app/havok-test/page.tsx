@@ -101,6 +101,15 @@ function buildBoneHierarchy(
 
 // ─── Main component ──────────────────────────────────────
 
+/** Cache for base positions (for hips offset) — cleared on init */
+let _hipsBasePosCache = new Map<string, Vector3>();
+function ensureBasePos(node: TransformNode, key: string): Vector3 {
+  if (!_hipsBasePosCache.has(key)) {
+    _hipsBasePosCache.set(key, node.position.clone());
+  }
+  return _hipsBasePosCache.get(key)!;
+}
+
 /** Key bones for selection */
 const SELECTABLE_BONES = [
   'mixamorig:Hips', 'mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2',
@@ -122,6 +131,7 @@ export default function HavokTestPage() {
   const [posY, setPosY] = useState(0);
   const [posZ, setPosZ] = useState(0);
   const [heightScale, setHeightScale] = useState(1.0);
+  const [hipsHeight, setHipsHeight] = useState(0);
 
   // Refs for scene objects
   const characterRef = useRef<HavokCharacter | null>(null);
@@ -212,6 +222,8 @@ export default function HavokTestPage() {
     (async () => {
       try {
         setStatus('Initializing...');
+        // Clear caches from previous hot reloads
+        _hipsBasePosCache = new Map();
         await initHavok(scene);
         if (disposed) return;
 
@@ -253,7 +265,33 @@ export default function HavokTestPage() {
       }
     })();
 
+    // Track hips offset for render loop
+    let _hipsOffset = 0;
+    const setHipsOffsetRef = (v: number) => { _hipsOffset = v; };
+    (window as unknown as Record<string, unknown>).__setHipsOffset = setHipsOffsetRef;
+
     engine.runRenderLoop(() => {
+      // Apply hips height offset to both models
+      const char = characterRef.current;
+      const vis = boneVisRef.current;
+      if (char) {
+        const hips = char.allBones.get('mixamorig:Hips');
+        if (hips) {
+          const base = ensureBasePos(hips, 'char_hips_base');
+          hips.position.y = base.y + _hipsOffset;
+        }
+      }
+      if (vis) {
+        const hipsVis = vis.get('mixamorig:Hips');
+        if (hipsVis) {
+          const base = ensureBasePos(hipsVis, 'vis_hips_base');
+          hipsVis.position.y = base.y + _hipsOffset;
+        }
+      }
+      // Run IK after hips position change
+      if (char) {
+        updateHavokCharacter(scene, char);
+      }
       scene.render();
     });
 
@@ -266,6 +304,12 @@ export default function HavokTestPage() {
   useEffect(() => {
     applyTransform(selectedBone, rotX, rotY, rotZ, posX, posY, posZ);
   }, [selectedBone, rotX, rotY, rotZ, posX, posY, posZ, applyTransform]);
+
+  // Sync hips height offset to render loop
+  useEffect(() => {
+    const fn = (window as unknown as Record<string, unknown>).__setHipsOffset as ((v: number) => void) | undefined;
+    if (fn) fn(hipsHeight);
+  }, [hipsHeight]);
 
   // Apply height scaling
   useEffect(() => {
@@ -354,6 +398,17 @@ export default function HavokTestPage() {
             onChange={e => setPosZ(Number(e.target.value))} style={sliderStyle} />
         </div>
 
+        {/* Hips height (IK demo) */}
+        <div style={{ marginBottom: 8, borderTop: '1px solid #444', paddingTop: 8 }}>
+          <b>Hips Height (IK test)</b>
+          <div style={labelStyle}><span>{hipsHeight.toFixed(3)}m</span></div>
+          <input type="range" min={-0.5} max={0.3} step={0.005} value={hipsHeight}
+            onChange={e => setHipsHeight(Number(e.target.value))} style={sliderStyle} />
+          <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+            下げると膝が曲がり足は地面に固定 = IK動作確認
+          </div>
+        </div>
+
         {/* Height scale */}
         <div style={{ marginBottom: 8, borderTop: '1px solid #444', paddingTop: 8 }}>
           <b>Height Scale</b>
@@ -367,7 +422,7 @@ export default function HavokTestPage() {
 
         {/* Reset button */}
         <button
-          onClick={() => { setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0); setHeightScale(1.0); }}
+          onClick={() => { setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0); setHeightScale(1.0); setHipsHeight(0); }}
           style={{ width: '100%', padding: 6, background: '#555', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
         >Reset All</button>
       </div>
