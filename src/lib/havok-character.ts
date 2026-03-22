@@ -657,6 +657,57 @@ export async function createHavokCharacter(
   };
 }
 
+// ─── Bone Scaling ────────────────────────────────────────
+
+/** Base bone positions (stored on first call for delta scaling) */
+const _baseBonePositions = new Map<string, Map<string, Vector3>>();
+
+function ensureBasePositions(character: HavokCharacter): Map<string, Vector3> {
+  const key = character.root.name;
+  if (!_baseBonePositions.has(key)) {
+    const base = new Map<string, Vector3>();
+    for (const [name, bone] of character.allBones) {
+      base.set(name, bone.position.clone());
+    }
+    _baseBonePositions.set(key, base);
+  }
+  return _baseBonePositions.get(key)!;
+}
+
+/**
+ * Scale all bone lengths uniformly.
+ * factor=1.0 is original, 0.5 is half height, 2.0 is double.
+ */
+export function scaleBones(character: HavokCharacter, factor: number): void {
+  const base = ensureBasePositions(character);
+  for (const [name, bone] of character.allBones) {
+    const basePos = base.get(name);
+    if (basePos) {
+      bone.position.set(basePos.x * factor, basePos.y * factor, basePos.z * factor);
+    }
+  }
+}
+
+/**
+ * Rebuild all body meshes after bone scaling.
+ * Disposes old meshes and creates new ones matching current bone lengths.
+ */
+export function rebuildBodyMeshes(
+  scene: Scene, character: HavokCharacter, bodyColor: Color3, prefix: string,
+): void {
+  // Dispose old meshes
+  for (const mesh of character.bodyMeshes.values()) {
+    mesh.dispose();
+  }
+  character.bodyMeshes.clear();
+
+  // Create new meshes
+  const newMeshes = createBodyMeshes(scene, character.allBones, bodyColor, prefix);
+  for (const [name, mesh] of newMeshes) {
+    character.bodyMeshes.set(name, mesh);
+  }
+}
+
 // ─── Per-Frame Update ────────────────────────────────────
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter): void {

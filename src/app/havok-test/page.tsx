@@ -9,6 +9,7 @@ import {
 import {
   initHavok, createHavokCharacter, updateHavokCharacter,
   calculateCenterOfMass, getBalanceDeviation,
+  scaleBones, rebuildBodyMeshes,
   type HavokCharacter,
 } from '@/lib/havok-character';
 
@@ -120,12 +121,16 @@ export default function HavokTestPage() {
   const [posX, setPosX] = useState(0);
   const [posY, setPosY] = useState(0);
   const [posZ, setPosZ] = useState(0);
+  const [heightScale, setHeightScale] = useState(1.0);
 
   // Refs for scene objects
   const characterRef = useRef<HavokCharacter | null>(null);
   const boneVisRef = useRef<Map<string, TransformNode> | null>(null);
   const baseRotationsRef = useRef<Map<string, Quaternion>>(new Map());
   const basePositionsRef = useRef<Map<string, Vector3>>(new Map());
+  const visBasePositionsRef = useRef<Map<string, Vector3>>(new Map());
+  const sceneRef = useRef<Scene | null>(null);
+  const bodyColorRef = useRef(new Color3(0.2, 0.35, 0.8));
 
   // Store base rotations and positions for both hierarchies
   const storeBaseValues = useCallback((boneName: string) => {
@@ -187,6 +192,7 @@ export default function HavokTestPage() {
     let disposed = false;
     const engine = new Engine(canvas, true);
     const scene = new Scene(engine);
+    sceneRef.current = scene;
     scene.clearColor = new Color4(0.12, 0.12, 0.18, 1);
 
     const camera = new ArcRotateCamera('cam', Math.PI / 2, Math.PI / 3.2, 4.5, new Vector3(0.5, 0.9, 0), scene);
@@ -218,6 +224,13 @@ export default function HavokTestPage() {
         visRoot.position.x = -1;
         const visBones = buildBoneHierarchy(scene, boneData, visRoot);
         boneVisRef.current = visBones;
+
+        // Store base positions for bone vis scaling
+        const visBase = new Map<string, Vector3>();
+        for (const [name, bone] of visBones) {
+          visBase.set(name, bone.position.clone());
+        }
+        visBasePositionsRef.current = visBase;
 
         // Right: voxel mesh character
         const character = await createHavokCharacter(scene, {
@@ -253,6 +266,32 @@ export default function HavokTestPage() {
   useEffect(() => {
     applyTransform(selectedBone, rotX, rotY, rotZ, posX, posY, posZ);
   }, [selectedBone, rotX, rotY, rotZ, posX, posY, posZ, applyTransform]);
+
+  // Apply height scaling
+  useEffect(() => {
+    const char = characterRef.current;
+    const vis = boneVisRef.current;
+    const scene = sceneRef.current;
+    if (!char || !scene) return;
+
+    // Scale character bones + rebuild meshes
+    scaleBones(char, heightScale);
+    rebuildBodyMeshes(scene, char, bodyColorRef.current, 'test');
+
+    // Scale bone visualization
+    if (vis) {
+      const visBase = visBasePositionsRef.current;
+      for (const [name, bone] of vis) {
+        const base = visBase.get(name);
+        if (base) {
+          bone.position.set(base.x * heightScale, base.y * heightScale, base.z * heightScale);
+        }
+      }
+    }
+
+    // Re-store base values for current bone (positions changed)
+    storeBaseValues(selectedBone);
+  }, [heightScale, storeBaseValues, selectedBone]);
 
   const sliderStyle: React.CSSProperties = { width: '100%', margin: '2px 0' };
   const labelStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#ccc' };
@@ -315,11 +354,22 @@ export default function HavokTestPage() {
             onChange={e => setPosZ(Number(e.target.value))} style={sliderStyle} />
         </div>
 
+        {/* Height scale */}
+        <div style={{ marginBottom: 8, borderTop: '1px solid #444', paddingTop: 8 }}>
+          <b>Height Scale</b>
+          <div style={labelStyle}>
+            <span>{heightScale.toFixed(2)}x</span>
+            <span>≈{(1.78 * heightScale).toFixed(2)}m</span>
+          </div>
+          <input type="range" min={0.5} max={2.0} step={0.01} value={heightScale}
+            onChange={e => setHeightScale(Number(e.target.value))} style={sliderStyle} />
+        </div>
+
         {/* Reset button */}
         <button
-          onClick={() => { setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0); }}
+          onClick={() => { setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0); setHeightScale(1.0); }}
           style={{ width: '100%', padding: 6, background: '#555', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
-        >Reset</button>
+        >Reset All</button>
       </div>
 
       <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
