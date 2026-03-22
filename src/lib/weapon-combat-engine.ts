@@ -592,7 +592,22 @@ export interface BonePose {
 }
 export type PoseData = Record<string, BonePose>;
 
-const BONES = ['hips','torso','head','leftArm','rightArm','leftHand','rightHand','leftLeg','rightLeg','leftFoot','rightFoot'] as const;
+export const BONES = ['hips','torso','head','leftArm','rightArm','leftHand','rightHand','leftLeg','rightLeg','leftFoot','rightFoot'] as const;
+
+/** Body part geometry definitions for procedural fighter */
+export const BODY_PART_DEFS = [
+  { name: 'hips',      w: 0.28, h: 0.15, d: 0.16, skin: false },
+  { name: 'torso',     w: 0.3,  h: 0.32, d: 0.18, skin: false },
+  { name: 'head',      w: 0.16, h: 0.18, d: 0.16, skin: true  },
+  { name: 'leftArm',   w: 0.08, h: 0.25, d: 0.08, skin: false },
+  { name: 'rightArm',  w: 0.08, h: 0.25, d: 0.08, skin: false },
+  { name: 'leftHand',  w: 0.07, h: 0.10, d: 0.05, skin: true  },
+  { name: 'rightHand', w: 0.07, h: 0.10, d: 0.05, skin: true  },
+  { name: 'leftLeg',   w: 0.10, h: 0.35, d: 0.10, skin: false },
+  { name: 'rightLeg',  w: 0.10, h: 0.35, d: 0.10, skin: false },
+  { name: 'leftFoot',  w: 0.10, h: 0.06, d: 0.14, skin: true  },
+  { name: 'rightFoot', w: 0.10, h: 0.06, d: 0.14, skin: true  },
+] as const;
 
 // === Spear+Shield (two-handed) poses ===
 
@@ -842,20 +857,52 @@ export interface CombatFighterVisual {
   weaponAttachR: TransformNode;
   weaponAttachL: TransformNode;
   weaponMeshes: Mesh[];             // weapon meshes for hit detection
+  /** LOD: single box proxy for distant rendering (null if not created) */
+  lodProxy: Mesh | null;
+  /** All detail meshes (body + weapon) for LOD toggling */
+  detailMeshes: Mesh[];
+}
+
+export interface BuildFighterOptions {
+  /** Skip bounding info sync & picking (for mass-combat modes that don't use mesh intersection) */
+  lightweight?: boolean;
+}
+
+// Material cache: share materials across fighters to reduce draw calls
+const _matCache = new Map<string, StandardMaterial>();
+
+function getOrCreateMaterial(scene: Scene, key: string, create: () => StandardMaterial): StandardMaterial {
+  // include scene uid to avoid cross-scene stale refs
+  const fullKey = `${(scene as any).uid}_${key}`;
+  let mat = _matCache.get(fullKey);
+  if (mat && mat.getScene() === scene) return mat;
+  mat = create();
+  mat.freeze();
+  _matCache.set(fullKey, mat);
+  return mat;
 }
 
 export function buildCombatFighter(
-  scene: Scene, color: Color3, prefix: string,
+  scene: Scene, color: Color3, prefix: string, opts?: BuildFighterOptions,
 ): CombatFighterVisual {
+  const lightweight = opts?.lightweight ?? false;
   const root = new TransformNode(`${prefix}_root`, scene);
   const bones = new Map<string, TransformNode>();
 
-  const mat = new StandardMaterial(`${prefix}_mat`, scene);
-  mat.diffuseColor = color;
-  mat.specularColor = new Color3(0.2, 0.2, 0.2);
+  // share body materials by color key, share skin material globally
+  const colorKey = `body_${color.r.toFixed(2)}_${color.g.toFixed(2)}_${color.b.toFixed(2)}`;
+  const mat = getOrCreateMaterial(scene, colorKey, () => {
+    const m = new StandardMaterial(`mat_${colorKey}`, scene);
+    m.diffuseColor = color;
+    m.specularColor = new Color3(0.2, 0.2, 0.2);
+    return m;
+  });
 
-  const skinMat = new StandardMaterial(`${prefix}_skin`, scene);
-  skinMat.diffuseColor = new Color3(0.9, 0.75, 0.6);
+  const skinMat = getOrCreateMaterial(scene, 'skin', () => {
+    const m = new StandardMaterial('mat_skin', scene);
+    m.diffuseColor = new Color3(0.9, 0.75, 0.6);
+    return m;
+  });
 
   const bodyMeshes = new Map<string, Mesh>();
 
@@ -865,6 +912,11 @@ export function buildCombatFighter(
     const mesh = MeshBuilder.CreateBox(`${prefix}_${name}_mesh`, { width: w, height: h, depth: d }, scene);
     mesh.material = material;
     mesh.parent = node;
+    if (lightweight) {
+      mesh.isPickable = false;
+      mesh.doNotSyncBoundingInfo = true;
+      mesh.cullingStrategy = Mesh.CULLINGSTRATEGY_BOUNDINGSPHERE_ONLY;
+    }
     bones.set(name, node);
     bodyMeshes.set(name, mesh);
     return node;
@@ -891,7 +943,20 @@ export function buildCombatFighter(
   weaponAttachL.parent = lHand;
   weaponAttachL.position.set(0, -0.08, 0.05);
 
-  return { root, bones, bodyMeshes, weaponAttachR, weaponAttachL, weaponMeshes: [] };
+  // LOD proxy: single box for distant rendering (only in lightweight mode)
+  let lodProxy: Mesh | null = null;
+  if (lightweight) {
+    lodProxy = MeshBuilder.CreateBox(`${prefix}_lod`, { width: 0.3, height: 1.2, depth: 0.2 }, scene);
+    lodProxy.material = mat;
+    lodProxy.parent = root;
+    lodProxy.position.y = 0.8;
+    lodProxy.isPickable = false;
+    lodProxy.setEnabled(false); // hidden by default; shown when far
+  }
+
+  const detailMeshes = Array.from(bodyMeshes.values());
+
+  return { root, bones, bodyMeshes, weaponAttachR, weaponAttachL, weaponMeshes: [], lodProxy, detailMeshes };
 }
 
 export function applyPose(fighter: CombatFighterVisual, pose: PoseData) {

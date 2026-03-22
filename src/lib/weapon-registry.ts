@@ -597,6 +597,74 @@ export function getAllWeapons(): WeaponDef[] {
   return Object.values(WEAPON_REGISTRY);
 }
 
+// ─── Dynamic weapon builder from equipment_meta ─────────
+
+export interface ConfiguredWeaponInfo {
+  category: string;
+  pieceKey: string;
+  gripPosition: { x: number; y: number; z: number };
+  tipPosition: { x: number; y: number; z: number };
+  pommelPosition: { x: number; y: number; z: number };
+}
+
+/**
+ * Build a WeaponDef from a configured weapon discovered via /api/configured-weapons.
+ * Uses one-handed hammer poses as default (works well for swords, axes, maces, etc.)
+ */
+export function buildWeaponDefFromConfig(info: ConfiguredWeaponInfo): WeaponDef {
+  const id = `equip_${info.category}_${info.pieceKey}`;
+  // check if this weapon is already in the static registry
+  const existing = Object.values(WEAPON_REGISTRY).find(
+    w => w.equipmentSource?.category === info.category && w.equipmentSource?.pieceKey === info.pieceKey
+  );
+  if (existing) return existing;
+
+  return {
+    id,
+    name: info.pieceKey.replace(/_/g, ' '),
+    nameJa: info.pieceKey.replace(/_/g, ' '),
+    grip: 'one-handed',
+    dualWield: false,
+    voxPaths: [],
+    slots: ['right'],
+    meshScale: 1.5,
+    meshOffset: [0, 0, 0],
+    damage: 18,
+    staminaCost: 11,
+    maxCombo: 3,
+    equipmentSource: { category: info.category, pieceKey: info.pieceKey },
+    poses: {
+      idle: HAMMER_IDLE,
+      block: HAMMER_BLOCK,
+      hit: POSE_HIT,
+      dodge: POSE_DODGE,
+      ko: POSE_KO,
+      victory: POSE_VICTORY,
+      attacks: generateHammerAttacks(),
+      attackWindupFallback: HAMMER_WINDUP_R,
+      attackStrikeFallback: HAMMER_STRIKE_R,
+    },
+  };
+}
+
+/**
+ * Fetch all configured weapons from the server and return WeaponDef array.
+ * Falls back to static WEAPON_ADVENTURER_SWORD + WEAPON_AXE on error.
+ */
+export async function fetchConfiguredWeapons(): Promise<WeaponDef[]> {
+  try {
+    const resp = await fetch('/api/configured-weapons');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data: { weapons: ConfiguredWeaponInfo[] } = await resp.json();
+    if (!data.weapons || data.weapons.length === 0) {
+      return [WEAPON_ADVENTURER_SWORD, WEAPON_AXE];
+    }
+    return data.weapons.map(buildWeaponDefFromConfig);
+  } catch {
+    return [WEAPON_ADVENTURER_SWORD, WEAPON_AXE];
+  }
+}
+
 // ─── Pose resolver ───────────────────────────────────────
 
 function attackPoseKey(move: AttackMove, phase: 'windup' | 'strike'): string {

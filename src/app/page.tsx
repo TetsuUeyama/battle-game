@@ -7,6 +7,7 @@ const pages = [
   { href: '/weapon-combat', title: 'Weapon Combat', desc: '武器戦闘（剣・斧・槍+盾・双槌 / 防具破壊・血しぶき）' },
   { href: '/judo', title: 'Judo', desc: '柔道 CPU対戦（組み手・投げ・寝技・締め）' },
   { href: '/water-gun', title: 'Water Gun', desc: '水鉄砲パーティクルFXプロトタイプ（水・血・毒）' },
+  { href: '/battle-royale', title: 'Battle Royale', desc: '108人バトルロイヤル（1発KO・最後の1人まで）' },
   { href: '/field', title: 'Field Viewer', desc: 'ボクセル地形ビューワー' },
 ];
 

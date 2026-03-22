@@ -15,8 +15,8 @@ import {
 } from '@/lib/weapon-combat-engine';
 import { ParticleFxSystem, PRESET_BLOOD } from '@/lib/particle-fx';
 import {
-  WEAPON_SPEAR_SHIELD, WEAPON_DUAL_HAMMERS, WEAPON_ADVENTURER_SWORD, WEAPON_AXE,
-  getWeaponPose, type WeaponDef,
+  WEAPON_ADVENTURER_SWORD, WEAPON_AXE,
+  getWeaponPose, fetchConfiguredWeapons, type WeaponDef,
 } from '@/lib/weapon-registry';
 
 const ARMOR_BONE_MAP: Record<ArmorPart, string> = {
@@ -30,9 +30,9 @@ const ARMOR_Y_OFFSET: Record<ArmorPart, number> = {
   leftLeg: 0.5, rightLeg: 0.5,
 };
 
-// weapon selection (change these to swap weapons)
-const F1_WEAPON = WEAPON_ADVENTURER_SWORD;
-const F2_WEAPON = WEAPON_AXE;
+function pickRandom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
 
 export default function WeaponCombatPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -45,9 +45,12 @@ export default function WeaponCombatPage() {
   const [f2Stamina, setF2Stamina] = useState(100);
   const [f1State, setF1State] = useState('');
   const [f2State, setF2State] = useState('');
+  const [f1WeaponName, setF1WeaponName] = useState('');
+  const [f2WeaponName, setF2WeaponName] = useState('');
   const [matchResult, setMatchResult] = useState<string | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const eventLogRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -57,8 +60,8 @@ export default function WeaponCombatPage() {
     const engine = new Engine(canvas, true);
     const scene = new Scene(engine);
     scene.clearColor = new Color4(0.12, 0.12, 0.18, 1);
+    scene.skipPointerMovePicking = true;
 
-    // camera from the side
     // camera from the side (X axis) so both fighters on Z axis are visible
     const camera = new ArcRotateCamera('cam', Math.PI / 2, Math.PI / 3.2, 4.5, new Vector3(0, 0.6, 0), scene);
     camera.attachControl(canvas, true);
@@ -103,12 +106,24 @@ export default function WeaponCombatPage() {
     buildAndAttachArmor(f1ArmorData, f1Visual, 'f1', f1ArmorColor);
     buildAndAttachArmor(f2ArmorData, f2Visual, 'f2', f2ArmorColor);
 
-    // weapon definitions for each fighter
-    const f1Weapon = F1_WEAPON;
-    const f2Weapon = F2_WEAPON;
+    // weapon definitions for each fighter (set dynamically)
+    let f1Weapon: WeaponDef = WEAPON_ADVENTURER_SWORD;
+    let f2Weapon: WeaponDef = WEAPON_AXE;
+    // available weapons (populated by fetchConfiguredWeapons)
+    let availableWeapons: WeaponDef[] = [WEAPON_ADVENTURER_SWORD, WEAPON_AXE];
 
     // register reset function accessible from outside useEffect
-    resetFnRef.current = () => {
+    resetFnRef.current = async () => {
+      // pick new random weapons
+      f1Weapon = pickRandom(availableWeapons);
+      f2Weapon = pickRandom(availableWeapons);
+      // ensure different weapons if possible
+      if (availableWeapons.length > 1) {
+        while (f2Weapon.id === f1Weapon.id) f2Weapon = pickRandom(availableWeapons);
+      }
+      setF1WeaponName(f1Weapon.nameJa);
+      setF2WeaponName(f2Weapon.nameJa);
+
       // reset game state
       gsRef.current = createCombatState();
       eventLogRef.current = [];
@@ -121,13 +136,10 @@ export default function WeaponCombatPage() {
       const newF1 = createVoxelArmorSet();
       const newF2 = createVoxelArmorSet();
       for (const part of ARMOR_PARTS) {
-        // dispose old meshes
         f1ArmorData[part].mesh?.dispose();
         f2ArmorData[part].mesh?.dispose();
-        // copy new data
         Object.assign(f1ArmorData[part], newF1[part]);
         Object.assign(f2ArmorData[part], newF2[part]);
-        // rebuild meshes
         const m1 = rebuildArmorMesh(scene, f1ArmorData[part], part, f1ArmorColor, 'f1');
         const bone1 = f1Visual.bones.get(ARMOR_BONE_MAP[part]);
         if (bone1) m1.parent = bone1;
@@ -135,9 +147,53 @@ export default function WeaponCombatPage() {
         const bone2 = f2Visual.bones.get(ARMOR_BONE_MAP[part]);
         if (bone2) m2.parent = bone2;
       }
+      // dispose old weapon meshes
+      for (const m of f1Visual.weaponMeshes) m.dispose();
+      for (const m of f2Visual.weaponMeshes) m.dispose();
+      f1Visual.weaponMeshes.length = 0;
+      f2Visual.weaponMeshes.length = 0;
+      // load new weapons
+      try {
+        const [f1Reach, f2Reach] = await Promise.all([
+          loadAndAttachWeapons(f1Weapon, f1Visual, 'f1'),
+          loadAndAttachWeapons(f2Weapon, f2Visual, 'f2'),
+        ]);
+        const gs = gsRef.current;
+        gs.fighters.fighter1.weaponReach = f1Reach;
+        gs.fighters.fighter2.weaponReach = f2Reach;
+        gs.fighters.fighter1.strikeRange = f1Reach * 0.85;
+        gs.fighters.fighter2.strikeRange = f2Reach * 0.85;
+        const lungeDist = 1.05;
+        const f1AR = gs.fighters.fighter1.strikeRange + lungeDist;
+        const f2AR = gs.fighters.fighter2.strikeRange + lungeDist;
+        gs.fighters.fighter1.safeRange = Math.max(f2AR + 0.3, f1AR);
+        gs.fighters.fighter2.safeRange = Math.max(f1AR + 0.3, f2AR);
+      } catch (e) {
+        console.error('Failed to reload weapons:', e);
+      }
+      // reset blend state
+      f1PrevPose = getWeaponPose(f1Weapon, CombatState.IDLE);
+      f2PrevPose = getWeaponPose(f2Weapon, CombatState.IDLE);
+      f1CurPose = f1PrevPose;
+      f2CurPose = f2PrevPose;
+      f1PrevState = CombatState.IDLE;
+      f2PrevState = CombatState.IDLE;
+      f1BlendT = 1;
+      f2BlendT = 1;
+
+      // countdown before combat restarts
+      combatStarted = false;
+      setCountdown(3);
+      await new Promise(r => setTimeout(r, 1000));
+      setCountdown(2);
+      await new Promise(r => setTimeout(r, 1000));
+      setCountdown(1);
+      await new Promise(r => setTimeout(r, 1000));
+      setCountdown(null);
+      combatStarted = true;
     };
 
-    // rotation is set dynamically each frame to face opponent
+    let combatStarted = false;
 
     // blend state
     const f1IdlePose = getWeaponPose(f1Weapon, CombatState.IDLE);
@@ -181,6 +237,16 @@ export default function WeaponCombatPage() {
     }
     (async () => {
       try {
+        // fetch all configured weapons, then pick random
+        availableWeapons = await fetchConfiguredWeapons();
+        f1Weapon = pickRandom(availableWeapons);
+        f2Weapon = pickRandom(availableWeapons);
+        if (availableWeapons.length > 1) {
+          while (f2Weapon.id === f1Weapon.id) f2Weapon = pickRandom(availableWeapons);
+        }
+        setF1WeaponName(f1Weapon.nameJa);
+        setF2WeaponName(f2Weapon.nameJa);
+
         const [f1Reach, f2Reach] = await Promise.all([
           loadAndAttachWeapons(f1Weapon, f1Visual, 'f1'),
           loadAndAttachWeapons(f2Weapon, f2Visual, 'f2'),
@@ -219,6 +285,16 @@ export default function WeaponCombatPage() {
 
         weaponsLoaded = true;
         setLoading(false);
+
+        // countdown before combat starts
+        setCountdown(3);
+        await new Promise(r => setTimeout(r, 1000));
+        setCountdown(2);
+        await new Promise(r => setTimeout(r, 1000));
+        setCountdown(1);
+        await new Promise(r => setTimeout(r, 1000));
+        setCountdown(null);
+        combatStarted = true;
       } catch (e) {
         console.error('Failed to load weapons:', e);
         setLoading(false);
@@ -229,7 +305,7 @@ export default function WeaponCombatPage() {
       const dt = engine.getDeltaTime() / 1000;
       const gs = gsRef.current;
 
-      combatUpdate(gs, dt);
+      if (combatStarted) combatUpdate(gs, dt);
 
       const f1 = gs.fighters.fighter1;
       const f2 = gs.fighters.fighter2;
@@ -346,7 +422,7 @@ export default function WeaponCombatPage() {
 
           if (hitData.hp <= 0) {
             hitData.hp = 0;
-            const winner = attackerId === 'fighter1' ? `青（${F1_WEAPON.nameJa}）` : `赤（${F2_WEAPON.nameJa}）`;
+            const winner = attackerId === 'fighter1' ? `青（${f1Weapon.nameJa}）` : `赤（${f2Weapon.nameJa}）`;
             gs.matchResult = `${winner} の勝利！`;
             gs.fighters[attackerId].state = CombatState.ROUND_OVER_WIN;
             gs.fighters[hit.target].state = CombatState.ROUND_OVER_LOSE;
@@ -387,6 +463,7 @@ export default function WeaponCombatPage() {
   const resetMatch = useCallback(() => {
     if (resetFnRef.current) resetFnRef.current();
     setEvents([]);
+    setMatchResult(null);
   }, []);
 
   return (
@@ -400,7 +477,7 @@ export default function WeaponCombatPage() {
           {/* Fighter 1 */}
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-              <span style={{ color: '#6699ff', fontWeight: 'bold' }}>青 ({F1_WEAPON.nameJa})</span>
+              <span style={{ color: '#6699ff', fontWeight: 'bold' }}>青 ({f1WeaponName})</span>
               <span>{f1State}</span>
             </div>
             <HpBar hp={f1Hp} max={100} color="#4488ff" />
@@ -412,7 +489,7 @@ export default function WeaponCombatPage() {
           {/* Fighter 2 */}
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
-              <span style={{ color: '#ff6666', fontWeight: 'bold' }}>赤 ({F2_WEAPON.nameJa})</span>
+              <span style={{ color: '#ff6666', fontWeight: 'bold' }}>赤 ({f2WeaponName})</span>
               <span>{f2State}</span>
             </div>
             <HpBar hp={f2Hp} max={100} color="#ff4444" />
@@ -429,6 +506,19 @@ export default function WeaponCombatPage() {
           background: 'rgba(0,0,0,0.7)', color: '#fff', fontSize: 20,
         }}>
           武器モデルを読み込み中...
+        </div>
+      )}
+
+      {/* Countdown overlay */}
+      {countdown !== null && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 25,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ fontSize: 72, fontWeight: 'bold', color: '#ffcc00', textShadow: '0 0 20px rgba(255,200,0,0.5)' }}>
+            {countdown}
+          </div>
         </div>
       )}
 
