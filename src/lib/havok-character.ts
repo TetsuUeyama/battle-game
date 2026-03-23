@@ -69,6 +69,8 @@ export interface HavokCharacter {
   ikBaseRotations: Map<string, { root: Quaternion; mid: Quaternion }>;
   /** Initial foot Y positions (for scaling) */
   initialFootY: { left: number; right: number };
+  /** T-pose foot world rotations (for keeping feet flat after IK) */
+  footBaseWorldRot: { left: Quaternion; right: Quaternion };
   /** Debug */
   debug: DebugVisuals;
 }
@@ -712,6 +714,7 @@ export async function createHavokCharacter(
     ikChains, footPlant, debug,
     ikBaseRotations: new Map(),
     initialFootY: { left: 0, right: 0 },
+    footBaseWorldRot: { left: Quaternion.Identity(), right: Quaternion.Identity() },
   };
 
   // Store T-pose rotations for IK (must be done before any IK runs)
@@ -720,6 +723,22 @@ export async function createHavokCharacter(
       root: (chain.root.rotationQuaternion ?? Quaternion.Identity()).clone(),
       mid: (chain.mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
     });
+  }
+
+  // Store T-pose foot world rotations (for keeping feet flat after IK)
+  const lFootBone = allBones.get('mixamorig:LeftFoot');
+  const rFootBone = allBones.get('mixamorig:RightFoot');
+  if (lFootBone) {
+    lFootBone.computeWorldMatrix(true);
+    character.footBaseWorldRot.left = Quaternion.FromRotationMatrix(
+      lFootBone.getWorldMatrix().getRotationMatrix(),
+    ).clone();
+  }
+  if (rFootBone) {
+    rFootBone.computeWorldMatrix(true);
+    character.footBaseWorldRot.right = Quaternion.FromRotationMatrix(
+      rFootBone.getWorldMatrix().getRotationMatrix(),
+    ).clone();
   }
 
   // Initialize foot planting (uses bone-data.json worldPositions for reliable targets)
@@ -807,6 +826,27 @@ export function rebuildBodyMeshes(
   }
 }
 
+// ─── Foot Horizontal Lock ────────────────────────────────
+
+/**
+ * After IK bends the leg, the foot bone rotates with the shin.
+ * This resets the foot to its T-pose world orientation (flat on ground).
+ */
+function keepFootHorizontal(footBone: TransformNode, tposeWorldRot: Quaternion): void {
+  const parent = footBone.parent as TransformNode;
+  if (!parent) return;
+
+  parent.computeWorldMatrix(true);
+  const parentWorldRot = Quaternion.FromRotationMatrix(
+    parent.getWorldMatrix().getRotationMatrix(),
+  );
+  const parentInv = parentWorldRot.clone();
+  parentInv.invertInPlace();
+
+  // localRot = inverse(parentWorldRot) * desiredWorldRot
+  footBone.rotationQuaternion = parentInv.multiply(tposeWorldRot);
+}
+
 // ─── Per-Frame Update ────────────────────────────────────
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter): void {
@@ -817,6 +857,10 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter): v
   // Arm IK only when targets are set (weight > 0)
   solveIK2Bone(chains.leftArm, character);
   solveIK2Bone(chains.rightArm, character);
+
+  // Keep feet flat on ground after IK
+  keepFootHorizontal(chains.leftLeg.end, character.footBaseWorldRot.left);
+  keepFootHorizontal(chains.rightLeg.end, character.footBaseWorldRot.right);
 
   // Center of mass
   const com = calculateCenterOfMass(character.combatBones);
