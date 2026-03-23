@@ -8,9 +8,10 @@ import {
 } from '@babylonjs/core';
 import {
   initHavok, createHavokCharacter, updateHavokCharacter,
-  calculateCenterOfMass, getBalanceDeviation,
   scaleBones, rebuildBodyMeshes,
-  type HavokCharacter,
+  equipWeapon, unequipWeapon, updateWeaponInertia,
+  startSwing, endSwing, releaseOffHand,
+  type HavokCharacter, type WeaponPhysics, type StanceType,
 } from '@/lib/havok-character';
 
 interface BoneEntry {
@@ -132,6 +133,21 @@ export default function HavokTestPage() {
   const [posZ, setPosZ] = useState(0);
   const [heightScale, setHeightScale] = useState(1.0);
   const [hipsHeight, setHipsHeight] = useState(0);
+
+  // Weapon controls
+  const [weaponEquipped, setWeaponEquipped] = useState(false);
+  const [weaponWeight, setWeaponWeight] = useState(3.0);
+  const [weaponLength, setWeaponLength] = useState(1.0);
+  const [gripType, setGripType] = useState<'one-handed' | 'two-handed'>('two-handed');
+  const [stance, setStanceState] = useState<StanceType>('front');
+  const [offHandReleased, setOffHandReleased] = useState(false);
+  const [swingActive, setSwingActive] = useState(false);
+  const [tipSpeed, setTipSpeed] = useState(0);
+  const [swingPower, setSwingPower] = useState(0);
+  // IK target for weapon swing test
+  const [swingTargetX, setSwingTargetX] = useState(0);
+  const [swingTargetY, setSwingTargetY] = useState(0);
+  const [swingTargetZ, setSwingTargetZ] = useState(0);
 
   // Refs for scene objects
   const characterRef = useRef<HavokCharacter | null>(null);
@@ -270,7 +286,24 @@ export default function HavokTestPage() {
     const setHipsOffsetRef = (v: number) => { _hipsOffset = v; };
     (window as unknown as Record<string, unknown>).__setHipsOffset = setHipsOffsetRef;
 
+    // Weapon swing target (accessed from render loop)
+    let _swingTarget = new Vector3(0, 0, 0);
+    const setSwingTargetRef = (x: number, y: number, z: number) => {
+      _swingTarget = new Vector3(x, y, z);
+    };
+    (window as unknown as Record<string, unknown>).__setSwingTarget = setSwingTargetRef;
+
+    // Weapon HUD update callback
+    let _weaponHudCb: ((speed: number, power: number) => void) | null = null;
+    (window as unknown as Record<string, unknown>).__setWeaponHudCb = (cb: (speed: number, power: number) => void) => { _weaponHudCb = cb; };
+
+    let prevTime = performance.now();
+
     engine.runRenderLoop(() => {
+      const now = performance.now();
+      const dt = Math.min((now - prevTime) / 1000, 0.1); // cap at 100ms
+      prevTime = now;
+
       // Apply hips height offset to both models
       const char = characterRef.current;
       const vis = boneVisRef.current;
@@ -288,9 +321,22 @@ export default function HavokTestPage() {
           hipsVis.position.y = base.y + _hipsOffset;
         }
       }
+
+      // Weapon inertia: 構えの基準位置 + スライダーオフセット
+      if (char && char.weapon) {
+        const basePos = char.weaponSwing.baseHandPos;
+        const desired = basePos.add(_swingTarget);
+        updateWeaponInertia(char, desired, dt);
+      }
+
       // Run IK after hips position change
       if (char) {
-        updateHavokCharacter(scene, char);
+        updateHavokCharacter(scene, char, dt);
+
+        // Update HUD
+        if (_weaponHudCb && char.weapon) {
+          _weaponHudCb(char.weaponSwing.tipSpeed, char.weaponSwing.power);
+        }
       }
       scene.render();
     });
@@ -310,6 +356,61 @@ export default function HavokTestPage() {
     const fn = (window as unknown as Record<string, unknown>).__setHipsOffset as ((v: number) => void) | undefined;
     if (fn) fn(hipsHeight);
   }, [hipsHeight]);
+
+  // Sync swing target to render loop
+  useEffect(() => {
+    const fn = (window as unknown as Record<string, unknown>).__setSwingTarget as ((x: number, y: number, z: number) => void) | undefined;
+    if (fn) fn(swingTargetX, swingTargetY, swingTargetZ);
+  }, [swingTargetX, swingTargetY, swingTargetZ]);
+
+  // Weapon HUD callback
+  useEffect(() => {
+    const setFn = (window as unknown as Record<string, unknown>).__setWeaponHudCb as ((cb: (s: number, p: number) => void) => void) | undefined;
+    if (setFn) {
+      setFn((speed: number, power: number) => {
+        setTipSpeed(speed);
+        setSwingPower(power);
+      });
+    }
+  }, []);
+
+  // Equip/unequip weapon
+  useEffect(() => {
+    const char = characterRef.current;
+    const scene = sceneRef.current;
+    if (!char || !scene) return;
+    if (weaponEquipped) {
+      const weapon: WeaponPhysics = {
+        weight: weaponWeight,
+        length: weaponLength,
+        gripType,
+        attackPoint: new Vector3(0, -weaponLength, 0),
+      };
+      equipWeapon(scene, char, weapon, stance);
+    } else {
+      unequipWeapon(char);
+      char.ikChains.rightArm.weight = 0;
+      char.ikChains.leftArm.weight = 0;
+    }
+  }, [weaponEquipped, weaponWeight, weaponLength, gripType, stance]);
+
+  // Off-hand release toggle
+  useEffect(() => {
+    const char = characterRef.current;
+    if (!char) return;
+    releaseOffHand(char, offHandReleased);
+  }, [offHandReleased]);
+
+  // Swing start/stop
+  useEffect(() => {
+    const char = characterRef.current;
+    if (!char) return;
+    if (swingActive) {
+      startSwing(char);
+    } else {
+      endSwing(char);
+    }
+  }, [swingActive]);
 
   // Apply height scaling
   useEffect(() => {
@@ -420,9 +521,114 @@ export default function HavokTestPage() {
             onChange={e => setHeightScale(Number(e.target.value))} style={sliderStyle} />
         </div>
 
+        {/* ── Weapon Controls ── */}
+        <div style={{ marginBottom: 8, borderTop: '1px solid #f80', paddingTop: 8 }}>
+          <b style={{ color: '#f80' }}>Weapon (Step 2)</b>
+
+          {/* Equip toggle */}
+          <div style={{ marginTop: 4 }}>
+            <label>
+              <input type="checkbox" checked={weaponEquipped}
+                onChange={e => setWeaponEquipped(e.target.checked)} />
+              {' '}武器装備
+            </label>
+          </div>
+
+          {weaponEquipped && (<>
+            {/* Grip type */}
+            <div style={{ marginTop: 4 }}>
+              <span>Grip: </span>
+              <select value={gripType} onChange={e => setGripType(e.target.value as 'one-handed' | 'two-handed')}
+                style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: 2 }}>
+                <option value="one-handed">片手</option>
+                <option value="two-handed">両手</option>
+              </select>
+            </div>
+
+            {/* Stance */}
+            <div style={{ marginTop: 4 }}>
+              <span>Stance: </span>
+              <select value={stance} onChange={e => setStanceState(e.target.value as StanceType)}
+                style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: 2 }}>
+                <option value="front">正面に構える</option>
+                <option value="side">右側面に下げる</option>
+                <option value="overhead">頭上に振りかぶり</option>
+              </select>
+            </div>
+
+            {/* Weight (仮値) */}
+            <div style={{ marginTop: 4 }}>
+              <div style={labelStyle}><span>Weight (仮): {weaponWeight.toFixed(1)}kg</span></div>
+              <input type="range" min={0.5} max={10} step={0.1} value={weaponWeight}
+                onChange={e => setWeaponWeight(Number(e.target.value))} style={sliderStyle} />
+            </div>
+
+            {/* Length */}
+            <div style={{ marginTop: 4 }}>
+              <div style={labelStyle}><span>Length: {weaponLength.toFixed(2)}m</span></div>
+              <input type="range" min={0.3} max={2.5} step={0.05} value={weaponLength}
+                onChange={e => setWeaponLength(Number(e.target.value))} style={sliderStyle} />
+            </div>
+
+            {/* Off-hand release (two-handed only) */}
+            {gripType === 'two-handed' && (
+              <div style={{ marginTop: 4 }}>
+                <label>
+                  <input type="checkbox" checked={offHandReleased}
+                    onChange={e => setOffHandReleased(e.target.checked)} />
+                  {' '}片手持ち切替 (リーチ拡張)
+                </label>
+              </div>
+            )}
+
+            {/* Swing target offsets */}
+            <div style={{ marginTop: 6, borderTop: '1px solid #555', paddingTop: 4 }}>
+              <b>Swing Target Offset</b>
+              <div style={labelStyle}><span>X: {swingTargetX.toFixed(2)}</span></div>
+              <input type="range" min={-1.5} max={1.5} step={0.02} value={swingTargetX}
+                onChange={e => setSwingTargetX(Number(e.target.value))} style={sliderStyle} />
+              <div style={labelStyle}><span>Y: {swingTargetY.toFixed(2)}</span></div>
+              <input type="range" min={-1.5} max={1.5} step={0.02} value={swingTargetY}
+                onChange={e => setSwingTargetY(Number(e.target.value))} style={sliderStyle} />
+              <div style={labelStyle}><span>Z: {swingTargetZ.toFixed(2)}</span></div>
+              <input type="range" min={-1.5} max={1.5} step={0.02} value={swingTargetZ}
+                onChange={e => setSwingTargetZ(Number(e.target.value))} style={sliderStyle} />
+            </div>
+
+            {/* Swing button */}
+            <div style={{ marginTop: 6 }}>
+              <button
+                onMouseDown={() => setSwingActive(true)}
+                onMouseUp={() => setSwingActive(false)}
+                onMouseLeave={() => setSwingActive(false)}
+                style={{
+                  width: '100%', padding: 8,
+                  background: swingActive ? '#f44' : '#c33',
+                  color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer',
+                  fontWeight: 'bold',
+                }}
+              >{swingActive ? 'Swinging...' : 'Swing (hold)'}</button>
+            </div>
+
+            {/* HUD */}
+            <div style={{ marginTop: 6, padding: 6, background: 'rgba(255,128,0,0.15)', borderRadius: 4 }}>
+              <div style={{ fontSize: 11 }}>Tip Speed: <b>{tipSpeed.toFixed(2)}</b> m/s</div>
+              <div style={{ fontSize: 11 }}>Power: <b>{swingPower.toFixed(2)}</b></div>
+              <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                Power = 先端移動距離 x weight (スイング中累積)
+              </div>
+            </div>
+          </>)}
+        </div>
+
         {/* Reset button */}
         <button
-          onClick={() => { setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0); setHeightScale(1.0); setHipsHeight(0); }}
+          onClick={() => {
+            setRotX(0); setRotY(0); setRotZ(0); setPosX(0); setPosY(0); setPosZ(0);
+            setHeightScale(1.0); setHipsHeight(0);
+            setWeaponEquipped(false); setStanceState('front'); setOffHandReleased(false); setSwingActive(false);
+            setSwingTargetX(0); setSwingTargetY(0); setSwingTargetZ(0);
+          }}
           style={{ width: '100%', padding: 6, background: '#555', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
         >Reset All</button>
       </div>

@@ -12,6 +12,135 @@ import {
 import { PhysicsBody, PhysicsMotionType, PhysicsShapeCapsule } from '@babylonjs/core/Physics/v2';
 import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
 
+// ─── Weapon Physics Types ─────────────────────────────────
+
+export type GripType = 'one-handed' | 'two-handed';
+
+/** 構えの種類 */
+export type StanceType = 'front' | 'side' | 'overhead';
+
+export interface WeaponPhysics {
+  weight: number;      // kg (仮値: 軽い=1, 重い=5+)
+  length: number;      // m  持ち手から先端まで
+  gripType: GripType;
+  attackPoint: Vector3; // 先端位置 (weapon local space, hand attach からの相対)
+}
+
+export interface WeaponSwingState {
+  /** 慣性で遅延するIKターゲット (world space) */
+  smoothedTarget: Vector3;
+  /** 武器装備時の右手ワールド位置 (固定基準点、ドリフト防止) */
+  baseHandPos: Vector3;
+  /** 前フレームの先端位置 (world space) */
+  prevTipPos: Vector3;
+  /** フレームごとの先端移動距離 */
+  tipSpeed: number;
+  /** 累積攻撃威力 (先端移動距離 × weight) */
+  power: number;
+  /** スイング中フラグ */
+  swinging: boolean;
+  /** 現在の構え */
+  stance: StanceType;
+}
+
+/** デフォルト武器 (テスト用仮値) */
+export function createDefaultWeapon(): WeaponPhysics {
+  return {
+    weight: 3.0,       // 仮値 3kg
+    length: 1.0,       // 1m
+    gripType: 'two-handed',
+    attackPoint: new Vector3(0, -1.0, 0),
+  };
+}
+
+export function createWeaponSwingState(): WeaponSwingState {
+  return {
+    smoothedTarget: Vector3.Zero(),
+    baseHandPos: Vector3.Zero(),
+    prevTipPos: Vector3.Zero(),
+    tipSpeed: 0,
+    power: 0,
+    swinging: false,
+    stance: 'front',
+  };
+}
+
+/**
+ * 構えごとの右手・左手IKターゲット位置を算出。
+ * キャラクターのルート位置と胸ボーン位置を基準にする。
+ * 戻り値は world space 座標。
+ */
+export function getStanceTargets(
+  character: HavokCharacter,
+  stance: StanceType,
+  gripType: GripType,
+): { rightTarget: Vector3; leftTarget: Vector3 | null } {
+  // 基準位置とボーン取得
+  const spine2 = character.combatBones.get('torso'); // Spine1 mapped as 'torso'
+  const hips = character.combatBones.get('hips');
+  if (!spine2 || !hips) {
+    return { rightTarget: Vector3.Zero(), leftTarget: null };
+  }
+
+  const chestPos = getWorldPos(spine2);
+
+  // 実際のボーン位置から方向ベクトルを算出 (ハードコードしない)
+  const rShoulder = character.allBones.get('mixamorig:RightShoulder');
+  const lShoulder = character.allBones.get('mixamorig:LeftShoulder');
+  if (!rShoulder || !lShoulder) {
+    return { rightTarget: Vector3.Zero(), leftTarget: null };
+  }
+
+  const rShoulderPos = getWorldPos(rShoulder);
+  const lShoulderPos = getWorldPos(lShoulder);
+
+  // 右肩→左肩 = キャラの左方向 (charLeft)
+  const charLeft = lShoulderPos.subtract(rShoulderPos).normalize();
+  charLeft.y = 0; charLeft.normalize(); // 水平成分のみ
+  // キャラの右方向
+  const charRight = charLeft.scale(-1);
+  // 上方向
+  const up = Vector3.Up();
+  // 前方 = 上 × 右方向 ではなく、charLeft × up で前方を得る
+  const forward = Vector3.Cross(charLeft, up).normalize();
+
+  let rTarget: Vector3;
+  let lTarget: Vector3 | null = null;
+
+  switch (stance) {
+    case 'front': {
+      // 正面に構える: 右手は胸の前方、やや右寄り
+      rTarget = chestPos.add(forward.scale(0.3)).add(charRight.scale(0.15));
+      if (gripType === 'two-handed') {
+        // 左手は右手よりやや左手側・下・手前
+        lTarget = rTarget.add(charLeft.scale(0.08)).add(new Vector3(0, -0.15, 0)).add(forward.scale(-0.05));
+      }
+      break;
+    }
+    case 'side': {
+      // 右側面に自然に下げる: 右手は腰の右横、自然に垂らす
+      const hipPos = getWorldPos(hips);
+      rTarget = hipPos.add(charRight.scale(0.3)).add(new Vector3(0, -0.1, 0));
+      if (gripType === 'two-handed') {
+        lTarget = rTarget.add(charLeft.scale(0.15)).add(new Vector3(0, -0.1, 0));
+      }
+      break;
+    }
+    case 'overhead': {
+      // 頭上に振りかぶり: 右手は頭上、やや後方(背中側)
+      const headBone = character.combatBones.get('head');
+      const headPos = headBone ? getWorldPos(headBone) : chestPos.add(new Vector3(0, 0.3, 0));
+      rTarget = headPos.add(charRight.scale(0.1)).add(new Vector3(0, 0.2, 0)).add(forward.scale(-0.15));
+      if (gripType === 'two-handed') {
+        lTarget = rTarget.add(charLeft.scale(0.1)).add(new Vector3(0, -0.05, 0));
+      }
+      break;
+    }
+  }
+
+  return { rightTarget: rTarget, leftTarget: lTarget };
+}
+
 // ─── Types ───────────────────────────────────────────────
 
 interface BoneEntry {
@@ -71,6 +200,11 @@ export interface HavokCharacter {
   initialFootY: { left: number; right: number };
   /** T-pose foot world rotations (for keeping feet flat after IK) */
   footBaseWorldRot: { left: Quaternion; right: Quaternion };
+  /** Weapon */
+  weapon: WeaponPhysics | null;
+  weaponSwing: WeaponSwingState;
+  /** 武器メッシュ (デバッグ用ボックス) */
+  weaponMesh: Mesh | null;
   /** Debug */
   debug: DebugVisuals;
 }
@@ -350,7 +484,7 @@ function createPhysicsCapsule(
 
 // ─── 2-Bone IK Solver ───────────────────────────────────
 
-function getWorldPos(node: TransformNode): Vector3 {
+export function getWorldPos(node: TransformNode): Vector3 {
   node.computeWorldMatrix(true);
   return node.getAbsolutePosition();
 }
@@ -715,6 +849,9 @@ export async function createHavokCharacter(
     ikBaseRotations: new Map(),
     initialFootY: { left: 0, right: 0 },
     footBaseWorldRot: { left: Quaternion.Identity(), right: Quaternion.Identity() },
+    weapon: null,
+    weaponSwing: createWeaponSwingState(),
+    weaponMesh: null,
   };
 
   // Store T-pose rotations for IK (must be done before any IK runs)
@@ -847,9 +984,207 @@ function keepFootHorizontal(footBone: TransformNode, tposeWorldRot: Quaternion):
   footBone.rotationQuaternion = parentInv.multiply(tposeWorldRot);
 }
 
+// ─── Weapon System ───────────────────────────────────────
+
+/**
+ * 武器を装備する。デバッグ用ボックスメッシュを生成して weaponAttachR に取り付ける。
+ */
+export function equipWeapon(
+  scene: Scene, character: HavokCharacter, weapon: WeaponPhysics,
+  stance: StanceType = 'front',
+): void {
+  // 既存の武器メッシュを破棄
+  if (character.weaponMesh) {
+    character.weaponMesh.dispose();
+    character.weaponMesh = null;
+  }
+
+  character.weapon = weapon;
+
+  // 武器の attackPoint を length に合わせて更新
+  weapon.attackPoint = new Vector3(0, -weapon.length, 0);
+
+  // デバッグ用: 武器を細長いボックスで可視化
+  const mesh = MeshBuilder.CreateBox(
+    `${character.root.name}_weapon`,
+    { width: 0.03, height: weapon.length, depth: 0.03 },
+    scene,
+  );
+  const mat = new StandardMaterial(`${character.root.name}_weaponMat`, scene);
+  mat.diffuseColor = new Color3(0.8, 0.8, 0.2);
+  mat.specularColor = new Color3(0.3, 0.3, 0.1);
+  mesh.material = mat;
+  mesh.parent = character.weaponAttachR;
+  // ボックスの中心を持ち手位置からlength/2下にオフセット
+  mesh.position.set(0, -weapon.length / 2, 0);
+
+  character.weaponMesh = mesh;
+
+  // 構えに基づいてIKターゲットを設定
+  const swing = character.weaponSwing;
+  swing.stance = stance;
+
+  const { rightTarget, leftTarget } = getStanceTargets(character, stance, weapon.gripType);
+  swing.baseHandPos = rightTarget.clone();
+  swing.smoothedTarget = rightTarget.clone();
+
+  character.ikChains.rightArm.target.copyFrom(rightTarget);
+  character.ikChains.rightArm.weight = 1;
+
+  if (weapon.gripType === 'two-handed' && leftTarget) {
+    character.ikChains.leftArm.target.copyFrom(leftTarget);
+    character.ikChains.leftArm.weight = 1;
+  }
+
+  const tipWorld = getWeaponTipWorld(character);
+  swing.prevTipPos.copyFrom(tipWorld);
+  swing.tipSpeed = 0;
+  swing.power = 0;
+  swing.swinging = false;
+}
+
+/**
+ * 構えを変更する (装備中に呼び出し)
+ */
+export function setStance(character: HavokCharacter, stance: StanceType): void {
+  if (!character.weapon) return;
+  const swing = character.weaponSwing;
+  swing.stance = stance;
+
+  const { rightTarget, leftTarget } = getStanceTargets(character, stance, character.weapon.gripType);
+  swing.baseHandPos = rightTarget.clone();
+
+  if (character.weapon.gripType === 'two-handed' && leftTarget
+      && character.ikChains.leftArm.weight > 0) {
+    character.ikChains.leftArm.target.copyFrom(leftTarget);
+  }
+}
+
+/**
+ * 武器を外す
+ */
+export function unequipWeapon(character: HavokCharacter): void {
+  if (character.weaponMesh) {
+    character.weaponMesh.dispose();
+    character.weaponMesh = null;
+  }
+  character.weapon = null;
+  character.weaponSwing = createWeaponSwingState();
+}
+
+/**
+ * 武器先端のワールド位置を取得
+ */
+export function getWeaponTipWorld(character: HavokCharacter): Vector3 {
+  if (!character.weapon) return getWorldPos(character.weaponAttachR);
+
+  character.weaponAttachR.computeWorldMatrix(true);
+  const tipLocal = character.weapon.attackPoint;
+  return Vector3.TransformCoordinates(tipLocal, character.weaponAttachR.getWorldMatrix());
+}
+
+/**
+ * 慣性シミュレーション: weightが重いほどIKターゲットの追従が遅れる。
+ * desiredTarget: プレイヤーが指定した目標位置
+ * dt: デルタタイム (秒)
+ */
+export function updateWeaponInertia(
+  character: HavokCharacter,
+  desiredTarget: Vector3,
+  dt: number,
+): void {
+  const weapon = character.weapon;
+  if (!weapon) {
+    character.ikChains.rightArm.target.copyFrom(desiredTarget);
+    return;
+  }
+
+  const swing = character.weaponSwing;
+
+  // 慣性係数: weight が大きいほど追従が遅い
+  // lerpFactor = 1/(1 + weight*2) → weight=1: 0.33, weight=3: 0.14, weight=5: 0.09
+  const inertiaFactor = 1.0 / (1.0 + weapon.weight * 2.0);
+  const lerpSpeed = inertiaFactor * 10.0; // 基本速度
+  const t = Math.min(1.0, lerpSpeed * dt);
+
+  // 慣性で遅延したターゲット位置
+  Vector3.LerpToRef(swing.smoothedTarget, desiredTarget, t, swing.smoothedTarget);
+
+  // IKターゲットに適用
+  character.ikChains.rightArm.target.copyFrom(swing.smoothedTarget);
+}
+
+/**
+ * 攻撃威力の算出: 先端移動距離 × weight
+ * 毎フレーム呼び出し、スイング中の累積値を返す。
+ */
+export function updateWeaponPower(character: HavokCharacter, dt: number): number {
+  const weapon = character.weapon;
+  if (!weapon) return 0;
+
+  const swing = character.weaponSwing;
+  const tipWorld = getWeaponTipWorld(character);
+
+  // 先端の移動距離
+  const dist = Vector3.Distance(tipWorld, swing.prevTipPos);
+  swing.tipSpeed = dt > 0 ? dist / dt : 0;
+
+  // 威力累積 (スイング中のみ)
+  if (swing.swinging) {
+    swing.power += dist * weapon.weight;
+  }
+
+  // 前フレーム位置を更新
+  swing.prevTipPos.copyFrom(tipWorld);
+
+  return swing.power;
+}
+
+/**
+ * スイング開始
+ */
+export function startSwing(character: HavokCharacter): void {
+  const swing = character.weaponSwing;
+  swing.swinging = true;
+  swing.power = 0;
+}
+
+/**
+ * スイング終了 → 累積威力を返す
+ */
+export function endSwing(character: HavokCharacter): number {
+  const swing = character.weaponSwing;
+  const finalPower = swing.power;
+  swing.swinging = false;
+  swing.power = 0;
+  return finalPower;
+}
+
+/**
+ * 両手持ち武器で片手に切替: 左手IK weight=0 でリーチ拡張。
+ * release=true で片手持ち(左手フリー)、false で両手持ちに戻す。
+ */
+export function releaseOffHand(character: HavokCharacter, release: boolean): void {
+  const weapon = character.weapon;
+  if (!weapon || weapon.gripType !== 'two-handed') return;
+
+  if (release) {
+    // 左手IKオフ → 片手持ちでリーチ拡張
+    character.ikChains.leftArm.weight = 0;
+  } else {
+    // 両手持ちに戻す: 左手を武器の下端付近にIKで追従
+    character.ikChains.leftArm.weight = 1;
+    // 左手ターゲット = 武器の中間あたり (grip寄り)
+    const tipWorld = getWeaponTipWorld(character);
+    const handWorld = getWorldPos(character.weaponAttachR);
+    // 武器の30%位置 (grip寄り) に左手を配置
+    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.leftArm.target);
+  }
+}
+
 // ─── Per-Frame Update ────────────────────────────────────
 
-export function updateHavokCharacter(scene: Scene, character: HavokCharacter): void {
+export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
   // Solve leg IK (foot planting targets set once via initFootPlanting)
   const chains = character.ikChains;
   solveIK2Bone(chains.leftLeg, character);
@@ -861,6 +1196,17 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter): v
   // Keep feet flat on ground after IK
   keepFootHorizontal(chains.leftLeg.end, character.footBaseWorldRot.left);
   keepFootHorizontal(chains.rightLeg.end, character.footBaseWorldRot.right);
+
+  // Weapon power calculation
+  updateWeaponPower(character, dt ?? (1 / 60));
+
+  // 両手持ち時の左手追従
+  if (character.weapon && character.weapon.gripType === 'two-handed'
+      && character.ikChains.leftArm.weight > 0) {
+    const tipWorld = getWeaponTipWorld(character);
+    const handWorld = getWorldPos(character.weaponAttachR);
+    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.leftArm.target);
+  }
 
   // Center of mass
   const com = calculateCenterOfMass(character.combatBones);
