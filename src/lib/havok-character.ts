@@ -6,8 +6,8 @@
  * custom 2-bone IK solver, foot planting, and center-of-mass.
  */
 import {
-  Scene, Vector3, Color3, Color4, MeshBuilder, StandardMaterial,
-  Mesh, TransformNode, Quaternion, Matrix, Ray,
+  Scene, Vector3, Color3, MeshBuilder, StandardMaterial,
+  Mesh, TransformNode, Quaternion,
 } from '@babylonjs/core';
 import { PhysicsBody, PhysicsMotionType, PhysicsShapeCapsule } from '@babylonjs/core/Physics/v2';
 import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
@@ -50,11 +50,11 @@ export interface DebugVisuals {
 
 export interface HavokCharacter {
   root: TransformNode;
-  /** All 65 Mixamo bones by name (e.g. "mixamorig:Hips") */
+  /** All Mixamo bones by name (e.g. "mixamorig:Hips") */
   allBones: Map<string, TransformNode>;
-  /** 11 combat-compatible bones by short name (e.g. "hips", "leftArm") */
+  /** Combat-compatible bones by short name (e.g. "hips", "leftArm") */
   combatBones: Map<string, TransformNode>;
-  /** Voxel body meshes for each of the 11 body parts */
+  /** Voxel body meshes for each body part */
   bodyMeshes: Map<string, Mesh>;
   weaponAttachR: TransformNode;
   weaponAttachL: TransformNode;
@@ -159,8 +159,6 @@ const BODY_PARTS: Record<string, BodyPartDef> = {
   rightFoot:     { bone: 'mixamorig:RightFoot',    childBone: 'mixamorig:RightToeBase', size: [0.08, 0, 0.06], thickness: 0, skin: true },
   rightToe:      { bone: 'mixamorig:RightToeBase', childBone: 'mixamorig:RightToe_End', size: [0.07, 0, 0.03], thickness: 0, skin: true },
 };
-
-const SKIN_PART_SET = new Set(['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot']);
 
 // ─── Havok Initialization ────────────────────────────────
 
@@ -367,25 +365,16 @@ function distanceBetweenBones(a: TransformNode, b: TransformNode): number {
  * 2. Compute world rotations for root and mid joints
  * 3. Convert to local rotations relative to parents
  *
- * Stores original rotations on first call so we can blend with IK weight.
  */
-let _ikDebugCounter = 0;
-
 export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
   if (chain.weight <= 0) return;
 
   const { root, mid, end, lengthA, lengthB, target, poleHint } = chain;
 
-  // Store base rotations on first call (instance-level)
+  // Use T-pose rotations stored at character creation (never overwritten)
   const chainKey = root.name;
-  const baseMap = character.ikBaseRotations;
-  if (!baseMap.has(chainKey)) {
-    baseMap.set(chainKey, {
-      root: (root.rotationQuaternion ?? Quaternion.Identity()).clone(),
-      mid: (mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
-    });
-  }
-  const baseRots = baseMap.get(chainKey)!;
+  const baseRots = character.ikBaseRotations.get(chainKey);
+  if (!baseRots) return; // safety: should never happen
 
   // Reset to base rotations before solving (prevents accumulation)
   root.rotationQuaternion = baseRots.root.clone();
@@ -448,10 +437,6 @@ export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
   // Rotation from current to desired (in world space)
   const rootDeltaWorld = rotationBetweenVectors(currentRootToMid, desiredRootToMid);
 
-  if (!(_ikDebugCounter % 120)) {
-    console.log(`[IK ${root.name}] rootPos=${rootPos.toString()} target=${target.toString()} dist=${targetDist.toFixed(3)}`);
-  }
-
   // Apply delta rotation to root in local space
   applyWorldDeltaRotation(root, rootDeltaWorld, chain.weight);
 
@@ -470,15 +455,6 @@ export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
 
   const midDeltaWorld = rotationBetweenVectors(currentMidToEnd, desiredMidToEnd);
   applyWorldDeltaRotation(mid, midDeltaWorld, chain.weight);
-
-  if (!(_ikDebugCounter % 60)) {
-    // Check result
-    mid.computeWorldMatrix(true);
-    end.computeWorldMatrix(true);
-    const finalEnd = end.getAbsolutePosition();
-    console.log(`[IK ${root.name}] finalEnd=${finalEnd.toString()} target=${target.toString()} error=${Vector3.Distance(finalEnd, target).toFixed(4)}`);
-  }
-  _ikDebugCounter++;
 }
 
 /** Compute shortest rotation quaternion from direction A to direction B */
@@ -620,8 +596,6 @@ export function initFootPlanting(character: HavokCharacter, boneData: BoneDataFi
   chains.rightLeg.target.copyFrom(fp.rightLocked);
   chains.leftLeg.weight = 1;
   chains.rightLeg.weight = 1;
-
-  console.log(`[initFootPlanting] L target=${fp.leftLocked.toString()} R target=${fp.rightLocked.toString()}`);
 }
 
 // ─── Debug Visuals ───────────────────────────────────────
@@ -728,6 +702,9 @@ export async function createHavokCharacter(
   };
   if (!enableDebug) debug.comSphere.isVisible = false;
 
+  // Clear module-level caches (prevents stale data from hot reloads)
+  _baseBonePositions.clear();
+
   const character: HavokCharacter = {
     root, allBones, combatBones, bodyMeshes,
     weaponAttachR, weaponAttachL,
@@ -737,7 +714,13 @@ export async function createHavokCharacter(
     initialFootY: { left: 0, right: 0 },
   };
 
-  _ikDebugCounter = 0;
+  // Store T-pose rotations for IK (must be done before any IK runs)
+  for (const chain of [ikChains.leftLeg, ikChains.rightLeg, ikChains.leftArm, ikChains.rightArm]) {
+    character.ikBaseRotations.set(chain.root.name, {
+      root: (chain.root.rotationQuaternion ?? Quaternion.Identity()).clone(),
+      mid: (chain.mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
+    });
+  }
 
   // Initialize foot planting (uses bone-data.json worldPositions for reliable targets)
   initFootPlanting(character, boneData);
@@ -784,10 +767,9 @@ export function scaleBones(character: HavokCharacter, factor: number): void {
   character.root.computeWorldMatrix(true);
   for (const bone of character.allBones.values()) bone.computeWorldMatrix(true);
 
-  const lFoot = chains.leftLeg.end.getAbsolutePosition();
-  const rFoot = chains.rightLeg.end.getAbsolutePosition();
+  const lFoot = chains.leftLeg.end.getAbsolutePosition().clone();
+  const rFoot = chains.rightLeg.end.getAbsolutePosition().clone();
 
-  // Target: use scaled foot Y (ankle height scales with character)
   fp.leftLocked = new Vector3(lFoot.x, initFY.left * factor, lFoot.z);
   fp.rightLocked = new Vector3(rFoot.x, initFY.right * factor, rFoot.z);
   chains.leftLeg.target.copyFrom(fp.leftLocked);
@@ -798,12 +780,11 @@ export function scaleBones(character: HavokCharacter, factor: number): void {
     chain.root.computeWorldMatrix(true);
     chain.mid.computeWorldMatrix(true);
     chain.end.computeWorldMatrix(true);
-    chain.lengthA = Vector3.Distance(chain.root.getAbsolutePosition(), chain.mid.getAbsolutePosition());
-    chain.lengthB = Vector3.Distance(chain.mid.getAbsolutePosition(), chain.end.getAbsolutePosition());
+    chain.lengthA = Vector3.Distance(chain.root.getAbsolutePosition().clone(), chain.mid.getAbsolutePosition().clone());
+    chain.lengthB = Vector3.Distance(chain.mid.getAbsolutePosition().clone(), chain.end.getAbsolutePosition().clone());
   }
 
-  // Clear IK base rotations (bone orientations need re-capture)
-  character.ikBaseRotations.clear();
+  // T-pose base rotations are preserved (they don't change with scale)
 }
 
 /**
