@@ -12,7 +12,10 @@ import {
   equipWeapon, unequipWeapon, updateWeaponInertia,
   startSwing, endSwing, releaseOffHand,
   fetchGameAssetWeapons, equipGameAssetWeapon,
+  getCharacterDirections,
+  createTarget, createSwingMotion, updateSwingMotion, applyBodyMotion,
   type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
+  type SwingMotion, type SwingType,
 } from '@/lib/havok-character';
 
 interface BoneEntry {
@@ -153,6 +156,9 @@ export default function HavokTestPage() {
   const [swingTargetX, setSwingTargetX] = useState(0);
   const [swingTargetY, setSwingTargetY] = useState(0);
   const [swingTargetZ, setSwingTargetZ] = useState(0);
+  // Attack motion
+  const [swingTypeSelect, setSwingTypeSelect] = useState<SwingType>('vertical');
+  const [attackPower, setAttackPower] = useState(100);
 
   // Refs for scene objects
   const characterRef = useRef<HavokCharacter | null>(null);
@@ -276,6 +282,14 @@ export default function HavokTestPage() {
         characterRef.current = character;
         if (disposed) return;
 
+        // 標的をキャラの前方に配置
+        const targetDirs = getCharacterDirections(character);
+        if (targetDirs) {
+          const charPos = character.root.position;
+          const targetPos = charPos.add(targetDirs.forward.scale(1.5));
+          createTarget(scene, targetPos, 'target');
+        }
+
         // Store base values for initial bone
         storeBaseValues(SELECTABLE_BONES[0]);
 
@@ -302,6 +316,21 @@ export default function HavokTestPage() {
     let _weaponHudCb: ((speed: number, power: number) => void) | null = null;
     (window as unknown as Record<string, unknown>).__setWeaponHudCb = (cb: (speed: number, power: number) => void) => { _weaponHudCb = cb; };
 
+    // Attack motion state
+    let _currentMotion: SwingMotion | null = null;
+
+    // 攻撃開始コールバック
+    (window as unknown as Record<string, unknown>).__startAttack = (swingType: SwingType, power: number) => {
+      const c = characterRef.current;
+      if (!c || !c.weapon) return;
+      const dirs = getCharacterDirections(c);
+      if (!dirs) return;
+      const charPos = c.root.position;
+      const targetHitPos = charPos.add(dirs.forward.scale(1.5)).add(new Vector3(0, 1.1, 0));
+      _currentMotion = createSwingMotion(c, targetHitPos, swingType, power);
+      startSwing(c);
+    };
+
     let prevTime = performance.now();
 
     engine.runRenderLoop(() => {
@@ -327,11 +356,31 @@ export default function HavokTestPage() {
         }
       }
 
-      // Weapon inertia: 構えの基準位置 + スライダーオフセット
+      // スイングモーション or 手動オフセット
       if (char && char.weapon) {
-        const basePos = char.weaponSwing.baseHandPos;
-        const desired = basePos.add(_swingTarget);
-        updateWeaponInertia(char, desired, dt);
+        if (_currentMotion && _currentMotion.active) {
+          // スイングモーション中: 慣性バイパス
+          const frame = updateSwingMotion(_currentMotion, dt);
+          if (frame) {
+            // 手のIKターゲット (画面右手 = Mixamo leftArm)
+            char.ikChains.leftArm.target.copyFrom(frame.handTarget);
+            char.weaponSwing.smoothedTarget.copyFrom(frame.handTarget);
+            // ボディモーション (胴体・腰・足)
+            const dirs = getCharacterDirections(char);
+            if (dirs) {
+              applyBodyMotion(char, frame.body, dirs.forward, dirs.charRight);
+            }
+          }
+          if (!_currentMotion.active) {
+            // モーション終了 → 構えに戻る
+            _currentMotion = null;
+          }
+        } else {
+          // 通常: 構えの基準位置 + スライダーオフセット
+          const basePos = char.weaponSwing.baseHandPos;
+          const desired = basePos.add(_swingTarget);
+          updateWeaponInertia(char, desired, dt);
+        }
       }
 
       // Run IK after hips position change
@@ -672,6 +721,37 @@ export default function HavokTestPage() {
                   fontWeight: 'bold',
                 }}
               >{swingActive ? 'Swinging...' : 'Swing (hold)'}</button>
+            </div>
+
+            {/* ── Attack Motion ── */}
+            <div style={{ marginTop: 6, borderTop: '1px solid #f44', paddingTop: 4 }}>
+              <b style={{ color: '#f44' }}>Attack Motion</b>
+              <div style={{ marginTop: 4 }}>
+                <select value={swingTypeSelect}
+                  onChange={e => setSwingTypeSelect(e.target.value as SwingType)}
+                  style={{ width: '100%', background: '#333', color: '#fff', border: '1px solid #555', padding: 4 }}>
+                  <option value="vertical">縦振り (Vertical)</option>
+                  <option value="horizontal">横振り (Horizontal)</option>
+                  <option value="thrust">突き (Thrust)</option>
+                </select>
+              </div>
+              {/* Power slider */}
+              <div style={{ marginTop: 4 }}>
+                <div style={labelStyle}><span>Power: {attackPower}%</span></div>
+                <input type="range" min={10} max={100} step={5} value={attackPower}
+                  onChange={e => setAttackPower(Number(e.target.value))} style={sliderStyle} />
+              </div>
+              <button
+                onClick={() => {
+                  const fn = (window as unknown as Record<string, unknown>).__startAttack as ((t: SwingType, p: number) => void) | undefined;
+                  if (fn) fn(swingTypeSelect, attackPower);
+                }}
+                style={{
+                  width: '100%', padding: 10, marginTop: 4,
+                  background: '#c22', color: '#fff', border: 'none', borderRadius: 4,
+                  cursor: 'pointer', fontWeight: 'bold', fontSize: 14,
+                }}
+              >Attack!</button>
             </div>
 
             {/* HUD */}

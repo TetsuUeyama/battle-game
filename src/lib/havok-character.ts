@@ -1597,3 +1597,346 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     updateDebugVisuals(scene, character.debug, com, lFoot, rFoot, character.root.name);
   }
 }
+
+// ─── Swing Motion System ─────────────────────────────────
+
+export type SwingType = 'vertical' | 'horizontal' | 'thrust';
+
+/** 胴体・下半身のモーションデータ */
+export interface BodyMotion {
+  /** 胴体の前傾角度 (ラジアン, + = 前傾) */
+  torsoLean: number;
+  /** 胴体のツイスト角度 (ラジアン, + = 右回転) */
+  torsoTwist: number;
+  /** 腰のY方向オフセット (m, - = しゃがみ) */
+  hipsOffset: number;
+  /** 腰の前方オフセット (m) */
+  hipsForward: number;
+  /** 右足(画面右)の前方踏み出し (m) */
+  footStepR: number;
+}
+
+export interface SwingMotion {
+  type: SwingType;
+  progress: number;
+  duration: number;
+  windupRatio: number;
+  startPos: Vector3;
+  windupPos: Vector3;
+  strikePos: Vector3;
+  active: boolean;
+  /** パワー (0-1) */
+  power: number;
+  /** 振りかぶり時のボディモーション */
+  windupBody: BodyMotion;
+  /** 打撃時のボディモーション */
+  strikeBody: BodyMotion;
+}
+
+/** ニュートラルなボディモーション */
+function neutralBody(): BodyMotion {
+  return { torsoLean: 0, torsoTwist: 0, hipsOffset: 0, hipsForward: 0, footStepR: 0 };
+}
+
+/**
+ * 標的の作成: 簡易ポスト型 (棒 + 頭部球)
+ */
+export function createTarget(
+  scene: Scene, position: Vector3, prefix: string,
+): { root: TransformNode; meshes: Mesh[] } {
+  const root = new TransformNode(`${prefix}_target`, scene);
+  root.position.copyFrom(position);
+
+  const mat = new StandardMaterial(`${prefix}_targetMat`, scene);
+  mat.diffuseColor = new Color3(0.7, 0.2, 0.2);
+
+  // 胴体 (円柱)
+  const body = MeshBuilder.CreateCylinder(`${prefix}_tBody`, {
+    height: 1.2, diameter: 0.25,
+  }, scene);
+  body.material = mat;
+  body.parent = root;
+  body.position.y = 0.6;
+
+  // 頭 (球)
+  const head = MeshBuilder.CreateSphere(`${prefix}_tHead`, { diameter: 0.25 }, scene);
+  head.material = mat;
+  head.parent = root;
+  head.position.y = 1.35;
+
+  // 台座
+  const base = MeshBuilder.CreateCylinder(`${prefix}_tBase`, {
+    height: 0.05, diameter: 0.4,
+  }, scene);
+  const baseMat = new StandardMaterial(`${prefix}_tBaseMat`, scene);
+  baseMat.diffuseColor = new Color3(0.4, 0.4, 0.4);
+  base.material = baseMat;
+  base.parent = root;
+  base.position.y = 0.025;
+
+  return { root, meshes: [body, head, base] };
+}
+
+/**
+ * スイングモーションを生成。
+ * targetPos: 標的のワールド位置 (打撃目標)
+ * power: 振りの強さ 0-100%。100%で最大振りかぶり・最大振り下ろし。
+ */
+export function createSwingMotion(
+  character: HavokCharacter,
+  targetPos: Vector3,
+  type: SwingType = 'vertical',
+  power: number = 100,
+): SwingMotion {
+  const dirs = getCharacterDirections(character);
+  if (!dirs || !character.weapon) {
+    return { type, progress: 0, duration: 0.6, windupRatio: 0.4, startPos: Vector3.Zero(), windupPos: Vector3.Zero(), strikePos: Vector3.Zero(), active: false, power: 0, windupBody: neutralBody(), strikeBody: neutralBody() };
+  }
+
+  const { forward, charRight } = dirs;
+  const weapon = character.weapon;
+  const swing = character.weaponSwing;
+  const p = Math.max(0, Math.min(100, power)) / 100; // 0.0 ~ 1.0
+
+  // 現在の手の位置 = スイング開始位置
+  const startPos = swing.baseHandPos.clone();
+
+  // 基準ボーン位置
+  const headBone = character.combatBones.get('head');
+  const headPos = headBone ? getWorldPos(headBone) : startPos.add(new Vector3(0, 0.4, 0));
+  const hipsBone = character.combatBones.get('hips');
+  const hipsPos = hipsBone ? getWorldPos(hipsBone) : startPos.add(new Vector3(0, -0.3, 0));
+
+  let windupPos: Vector3;
+  let strikePos: Vector3;
+
+  switch (type) {
+    case 'vertical': {
+      // ─── 縦振り ───
+      // 100%: 後頭部付近まで振りかぶり → 武器先端が床に着くまで振り下ろし
+      //   0%: ほぼ構えのまま → 小さく前方に振る
+
+      // 振りかぶり位置: 構え → 後頭部 (powerで補間)
+      const fullWindup = headPos
+        .add(forward.scale(-0.2))     // 後方
+        .add(new Vector3(0, 0.1, 0))  // 頭上
+        .add(charRight.scale(0.05));   // やや右
+      windupPos = Vector3.Lerp(startPos, fullWindup, p);
+
+      // 振り下ろし位置:
+      //  100%: 手が腰の前方付近 → 武器先端が床に届く
+      //  0%: 構え位置のやや前方下
+      const fullStrike = hipsPos
+        .add(forward.scale(0.35))     // 前方
+        .add(new Vector3(0, -0.1, 0)) // 腰より少し下
+        .add(charRight.scale(0.05));
+      const minStrike = startPos
+        .add(forward.scale(0.1))
+        .add(new Vector3(0, -0.05, 0));
+      strikePos = Vector3.Lerp(minStrike, fullStrike, p);
+      break;
+    }
+    case 'horizontal': {
+      // ─── 横振り ───
+      // 100%: 右側に大きく引いて → 左側まで薙ぎ払い
+      //   0%: 小さく右から左へ
+      const fullWindup = startPos
+        .add(charRight.scale(0.5))
+        .add(new Vector3(0, 0.15, 0))
+        .add(forward.scale(-0.05));
+      windupPos = Vector3.Lerp(startPos.add(charRight.scale(0.1)), fullWindup, p);
+
+      const fullStrike = startPos
+        .add(charRight.scale(-0.4))  // 左側
+        .add(forward.scale(0.2))
+        .add(new Vector3(0, -0.05, 0));
+      const minStrike = startPos
+        .add(charRight.scale(-0.1))
+        .add(forward.scale(0.1));
+      strikePos = Vector3.Lerp(minStrike, fullStrike, p);
+      break;
+    }
+    case 'thrust': {
+      // ─── 突き ───
+      // 100%: 大きく引いて → 標的まで突き出す
+      //   0%: 小さく前方にジャブ
+      const fullWindup = startPos
+        .add(forward.scale(-0.3))
+        .add(new Vector3(0, 0.05, 0));
+      windupPos = Vector3.Lerp(startPos.add(forward.scale(-0.05)), fullWindup, p);
+
+      // 突き: 標的に向かって武器長分を考慮
+      const toTarget = targetPos.subtract(startPos).normalize();
+      const fullStrike = targetPos.subtract(toTarget.scale(weapon.length * 0.5));
+      const minStrike = startPos.add(forward.scale(0.15));
+      strikePos = Vector3.Lerp(minStrike, fullStrike, p);
+      break;
+    }
+  }
+
+  // ─── ボディモーション (パワーに比例) ───
+  let windupBody: BodyMotion;
+  let strikeBody: BodyMotion;
+
+  switch (type) {
+    case 'vertical':
+      windupBody = {
+        torsoLean: -0.15 * p,   // 後傾
+        torsoTwist: 0.1 * p,    // やや右回転
+        hipsOffset: 0.02 * p,   // 少し持ち上がる
+        hipsForward: -0.03 * p, // 後退
+        footStepR: -0.05 * p,   // 右足やや後退
+      };
+      strikeBody = {
+        torsoLean: 0.35 * p,    // 大きく前傾
+        torsoTwist: -0.05 * p,  // わずかに左回転
+        hipsOffset: -0.08 * p,  // しゃがみ
+        hipsForward: 0.08 * p,  // 前方へ
+        footStepR: 0.12 * p,    // 右足踏み込み
+      };
+      break;
+    case 'horizontal':
+      windupBody = {
+        torsoLean: 0,
+        torsoTwist: 0.35 * p,   // 右に大きくひねり
+        hipsOffset: 0,
+        hipsForward: -0.02 * p,
+        footStepR: 0.05 * p,    // 右足開く
+      };
+      strikeBody = {
+        torsoLean: 0.1 * p,     // やや前傾
+        torsoTwist: -0.3 * p,   // 左へひねり (フォロースルー)
+        hipsOffset: -0.03 * p,
+        hipsForward: 0.05 * p,
+        footStepR: -0.03 * p,   // 右足戻る
+      };
+      break;
+    case 'thrust':
+      windupBody = {
+        torsoLean: -0.1 * p,    // 後傾 (引き)
+        torsoTwist: 0.1 * p,
+        hipsOffset: 0.02 * p,
+        hipsForward: -0.08 * p, // 後退
+        footStepR: -0.08 * p,   // 右足後退
+      };
+      strikeBody = {
+        torsoLean: 0.25 * p,    // 前傾 (突き出し)
+        torsoTwist: -0.05 * p,
+        hipsOffset: -0.04 * p,
+        hipsForward: 0.15 * p,  // 大きく前方
+        footStepR: 0.18 * p,    // 右足大きく踏み込み
+      };
+      break;
+  }
+
+  // 武器重量とパワーに応じた速度調整
+  const baseDuration = 0.4 + (1.0 - p) * 0.1;
+  const weightFactor = 1.0 + (weapon.weight - 1.0) * 0.08;
+  const duration = baseDuration * weightFactor;
+
+  return {
+    type,
+    progress: 0,
+    duration,
+    windupRatio: 0.35 + p * 0.1,
+    startPos,
+    windupPos,
+    strikePos,
+    active: true,
+    power: p,
+    windupBody,
+    strikeBody,
+  };
+}
+
+export interface SwingFrame {
+  handTarget: Vector3;
+  body: BodyMotion;
+}
+
+/** BodyMotion の線形補間 */
+function lerpBody(a: BodyMotion, b: BodyMotion, t: number): BodyMotion {
+  return {
+    torsoLean: a.torsoLean + (b.torsoLean - a.torsoLean) * t,
+    torsoTwist: a.torsoTwist + (b.torsoTwist - a.torsoTwist) * t,
+    hipsOffset: a.hipsOffset + (b.hipsOffset - a.hipsOffset) * t,
+    hipsForward: a.hipsForward + (b.hipsForward - a.hipsForward) * t,
+    footStepR: a.footStepR + (b.footStepR - a.footStepR) * t,
+  };
+}
+
+/**
+ * スイングモーション更新。毎フレーム呼び出し。
+ * 戻り値: 手のIKターゲット + ボディモーション
+ */
+export function updateSwingMotion(motion: SwingMotion, dt: number): SwingFrame | null {
+  if (!motion.active) return null;
+
+  motion.progress += dt / motion.duration;
+  if (motion.progress >= 1.0) {
+    motion.progress = 1.0;
+    motion.active = false;
+  }
+
+  const p = motion.progress;
+  const wr = motion.windupRatio;
+  const zero = neutralBody();
+
+  if (p < wr) {
+    const t = p / wr;
+    const eased = t * t;
+    return {
+      handTarget: Vector3.Lerp(motion.startPos, motion.windupPos, eased),
+      body: lerpBody(zero, motion.windupBody, eased),
+    };
+  } else {
+    const t = (p - wr) / (1.0 - wr);
+    const eased = 1.0 - (1.0 - t) * (1.0 - t);
+    return {
+      handTarget: Vector3.Lerp(motion.windupPos, motion.strikePos, eased),
+      body: lerpBody(motion.windupBody, motion.strikeBody, eased),
+    };
+  }
+}
+
+/**
+ * ボディモーションをキャラクターに適用。
+ * 胴体の回転・腰の移動・足のIKターゲット調整を行う。
+ */
+export function applyBodyMotion(
+  character: HavokCharacter,
+  body: BodyMotion,
+  forward: Vector3,
+  charRight: Vector3,
+): void {
+  // ─── 胴体回転 (Spine1 = 'torso') ───
+  const spineBone = character.allBones.get('mixamorig:Spine1');
+  if (spineBone) {
+    const baseRot = character.ikBaseRotations.get(spineBone.name);
+    if (baseRot) {
+      // 前傾 + ツイストを既存の回転に追加
+      const leanQuat = Quaternion.RotationAxis(charRight, body.torsoLean);
+      const twistQuat = Quaternion.RotationAxis(Vector3.Up(), body.torsoTwist);
+      spineBone.rotationQuaternion = twistQuat.multiply(leanQuat).multiply(baseRot.root);
+    }
+  }
+
+  // ─── 腰の移動 (Hips) ───
+  const hipsBone = character.allBones.get('mixamorig:Hips');
+  if (hipsBone) {
+    // hipsOffset (Y) と hipsForward を適用
+    // ベース位置は ensureBasePos で管理されているので、ここでは相対的にずらす
+    hipsBone.position.y += body.hipsOffset;
+    hipsBone.position.addInPlace(forward.scale(body.hipsForward));
+  }
+
+  // ─── 足の踏み込み (画面右足 = Mixamo LeftFoot のIKターゲット) ───
+  if (character.footPlant.leftLocked && Math.abs(body.footStepR) > 0.001) {
+    // Mixamo Left = 画面右足
+    const chains = character.ikChains;
+    const baseTarget = character.footPlant.leftLocked.clone();
+    chains.leftLeg.target.copyFrom(
+      baseTarget.add(forward.scale(body.footStepR)),
+    );
+  }
+}
