@@ -4,18 +4,27 @@ import path from 'path';
 
 const ASSETS_BASE = process.env.GAME_ASSETS_DIR || 'C:\\Users\\user\\developsecond\\game-assets';
 
+interface GripEntry {
+  position: { x: number; y: number; z: number };
+  is_primary: boolean;
+}
+
 interface EquipmentPiece {
   key: string;
   equipment_type: string;
   grip_config: {
     default_grip: string;
+    switchable: boolean;
     dominant_hand: string;
-    primary_grip: { position: { x: number; y: number; z: number } } | null;
+    primary_grip: GripEntry | null;
+    secondary_grip?: GripEntry | null;
   };
   direction?: {
     tip_position: { x: number; y: number; z: number };
     pommel_position: { x: number; y: number; z: number };
   };
+  weight?: number;
+  attack_voxels?: Record<string, string>;
 }
 
 interface EquipmentMeta {
@@ -28,8 +37,13 @@ export interface ConfiguredWeaponInfo {
   category: string;
   pieceKey: string;
   gripPosition: { x: number; y: number; z: number };
+  secondaryGripPosition: { x: number; y: number; z: number } | null;
   tipPosition: { x: number; y: number; z: number };
   pommelPosition: { x: number; y: number; z: number };
+  weight: number;
+  defaultGrip: string;
+  switchable: boolean;
+  attackVoxels: Record<string, string>;
 }
 
 /**
@@ -69,8 +83,13 @@ export async function GET() {
           category,
           pieceKey: key,
           gripPosition: grip,
+          secondaryGripPosition: piece.grip_config.secondary_grip?.position ?? null,
           tipPosition: dir.tip_position,
           pommelPosition: dir.pommel_position,
+          weight: piece.weight ?? 1000,
+          defaultGrip: piece.grip_config.default_grip ?? 'one_hand',
+          switchable: piece.grip_config.switchable ?? false,
+          attackVoxels: piece.attack_voxels ?? {},
         });
       }
     } catch {

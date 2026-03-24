@@ -11,7 +11,8 @@ import {
   scaleBones, rebuildBodyMeshes,
   equipWeapon, unequipWeapon, updateWeaponInertia,
   startSwing, endSwing, releaseOffHand,
-  type HavokCharacter, type WeaponPhysics, type StanceType,
+  fetchGameAssetWeapons, equipGameAssetWeapon,
+  type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
 } from '@/lib/havok-character';
 
 interface BoneEntry {
@@ -140,6 +141,10 @@ export default function HavokTestPage() {
   const [weaponLength, setWeaponLength] = useState(1.0);
   const [gripType, setGripType] = useState<'one-handed' | 'two-handed'>('two-handed');
   const [stance, setStanceState] = useState<StanceType>('front');
+  // Game-asset weapons
+  const [availableWeapons, setAvailableWeapons] = useState<GameAssetWeaponInfo[]>([]);
+  const [selectedAssetWeapon, setSelectedAssetWeapon] = useState<string>(''); // 'category/pieceKey' or ''
+  const [useAssetWeapon, setUseAssetWeapon] = useState(false);
   const [offHandReleased, setOffHandReleased] = useState(false);
   const [swingActive, setSwingActive] = useState(false);
   const [tipSpeed, setTipSpeed] = useState(0);
@@ -357,6 +362,16 @@ export default function HavokTestPage() {
     if (fn) fn(hipsHeight);
   }, [hipsHeight]);
 
+  // Fetch available game-asset weapons
+  useEffect(() => {
+    fetchGameAssetWeapons().then(weapons => {
+      setAvailableWeapons(weapons);
+      if (weapons.length > 0) {
+        setSelectedAssetWeapon(`${weapons[0].category}/${weapons[0].pieceKey}`);
+      }
+    });
+  }, []);
+
   // Sync swing target to render loop
   useEffect(() => {
     const fn = (window as unknown as Record<string, unknown>).__setSwingTarget as ((x: number, y: number, z: number) => void) | undefined;
@@ -380,19 +395,32 @@ export default function HavokTestPage() {
     const scene = sceneRef.current;
     if (!char || !scene) return;
     if (weaponEquipped) {
-      const weapon: WeaponPhysics = {
-        weight: weaponWeight,
-        length: weaponLength,
-        gripType,
-        attackPoint: new Vector3(0, -weaponLength, 0),
-      };
-      equipWeapon(scene, char, weapon, stance);
+      if (useAssetWeapon && selectedAssetWeapon) {
+        // Game-asset weapon
+        const info = availableWeapons.find(
+          w => `${w.category}/${w.pieceKey}` === selectedAssetWeapon
+        );
+        if (info) {
+          equipGameAssetWeapon(scene, char, info, stance).catch(console.error);
+        }
+      } else {
+        // Manual/debug weapon
+        const weapon: WeaponPhysics = {
+          weight: weaponWeight,
+          length: weaponLength,
+          gripType,
+          attackPoint: new Vector3(0, -weaponLength, 0),
+          gripOffset: Vector3.Zero(),
+          offHandOffset: new Vector3(0, 0.2, 0),
+        };
+        equipWeapon(scene, char, weapon, stance);
+      }
     } else {
       unequipWeapon(char);
       char.ikChains.rightArm.weight = 0;
       char.ikChains.leftArm.weight = 0;
     }
-  }, [weaponEquipped, weaponWeight, weaponLength, gripType, stance]);
+  }, [weaponEquipped, weaponWeight, weaponLength, gripType, stance, useAssetWeapon, selectedAssetWeapon, availableWeapons]);
 
   // Off-hand release toggle
   useEffect(() => {
@@ -525,6 +553,36 @@ export default function HavokTestPage() {
         <div style={{ marginBottom: 8, borderTop: '1px solid #f80', paddingTop: 8 }}>
           <b style={{ color: '#f80' }}>Weapon (Step 2)</b>
 
+          {/* Weapon source toggle */}
+          <div style={{ marginTop: 4 }}>
+            <label>
+              <input type="radio" name="weaponSrc" checked={!useAssetWeapon}
+                onChange={() => setUseAssetWeapon(false)} />
+              {' '}テスト用ボックス
+            </label>
+            <label style={{ marginLeft: 8 }}>
+              <input type="radio" name="weaponSrc" checked={useAssetWeapon}
+                onChange={() => setUseAssetWeapon(true)} />
+              {' '}Game Assets
+            </label>
+          </div>
+
+          {/* Game-asset weapon selector */}
+          {useAssetWeapon && availableWeapons.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <span>Weapon: </span>
+              <select value={selectedAssetWeapon}
+                onChange={e => setSelectedAssetWeapon(e.target.value)}
+                style={{ width: '100%', background: '#333', color: '#fff', border: '1px solid #555', padding: 2 }}>
+                {availableWeapons.map(w => (
+                  <option key={`${w.category}/${w.pieceKey}`} value={`${w.category}/${w.pieceKey}`}>
+                    {w.category}/{w.pieceKey}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Equip toggle */}
           <div style={{ marginTop: 4 }}>
             <label>
@@ -535,16 +593,6 @@ export default function HavokTestPage() {
           </div>
 
           {weaponEquipped && (<>
-            {/* Grip type */}
-            <div style={{ marginTop: 4 }}>
-              <span>Grip: </span>
-              <select value={gripType} onChange={e => setGripType(e.target.value as 'one-handed' | 'two-handed')}
-                style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: 2 }}>
-                <option value="one-handed">片手</option>
-                <option value="two-handed">両手</option>
-              </select>
-            </div>
-
             {/* Stance */}
             <div style={{ marginTop: 4 }}>
               <span>Stance: </span>
@@ -556,19 +604,32 @@ export default function HavokTestPage() {
               </select>
             </div>
 
-            {/* Weight (仮値) */}
-            <div style={{ marginTop: 4 }}>
-              <div style={labelStyle}><span>Weight (仮): {weaponWeight.toFixed(1)}kg</span></div>
-              <input type="range" min={0.5} max={10} step={0.1} value={weaponWeight}
-                onChange={e => setWeaponWeight(Number(e.target.value))} style={sliderStyle} />
-            </div>
+            {/* Manual weapon controls (only for test box mode) */}
+            {!useAssetWeapon && (<>
+              {/* Grip type */}
+              <div style={{ marginTop: 4 }}>
+                <span>Grip: </span>
+                <select value={gripType} onChange={e => setGripType(e.target.value as 'one-handed' | 'two-handed')}
+                  style={{ background: '#333', color: '#fff', border: '1px solid #555', padding: 2 }}>
+                  <option value="one-handed">片手</option>
+                  <option value="two-handed">両手</option>
+                </select>
+              </div>
 
-            {/* Length */}
-            <div style={{ marginTop: 4 }}>
-              <div style={labelStyle}><span>Length: {weaponLength.toFixed(2)}m</span></div>
-              <input type="range" min={0.3} max={2.5} step={0.05} value={weaponLength}
-                onChange={e => setWeaponLength(Number(e.target.value))} style={sliderStyle} />
-            </div>
+              {/* Weight (仮値) */}
+              <div style={{ marginTop: 4 }}>
+                <div style={labelStyle}><span>Weight (仮): {weaponWeight.toFixed(1)}kg</span></div>
+                <input type="range" min={0.5} max={10} step={0.1} value={weaponWeight}
+                  onChange={e => setWeaponWeight(Number(e.target.value))} style={sliderStyle} />
+              </div>
+
+              {/* Length */}
+              <div style={{ marginTop: 4 }}>
+                <div style={labelStyle}><span>Length: {weaponLength.toFixed(2)}m</span></div>
+                <input type="range" min={0.3} max={2.5} step={0.05} value={weaponLength}
+                  onChange={e => setWeaponLength(Number(e.target.value))} style={sliderStyle} />
+              </div>
+            </>)}
 
             {/* Off-hand release (two-handed only) */}
             {gripType === 'two-handed' && (
