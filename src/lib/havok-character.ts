@@ -631,6 +631,13 @@ export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
   applyWorldDeltaRotation(mid, midDeltaWorld, chain.weight);
 }
 
+/** Quaternion でベクトルを回転: v' = q * v * q^-1 */
+function rotateVectorByQuat(v: Vector3, q: Quaternion): Vector3 {
+  const conj = q.clone(); conj.invertInPlace();
+  const r = q.multiply(new Quaternion(v.x, v.y, v.z, 0)).multiply(conj);
+  return new Vector3(r.x, r.y, r.z);
+}
+
 /** Compute shortest rotation quaternion from direction A to direction B */
 function rotationBetweenVectors(from: Vector3, to: Vector3): Quaternion {
   const dot = Vector3.Dot(from, to);
@@ -1312,23 +1319,43 @@ export async function equipGameAssetWeapon(
   // 手のひらグリップ軸 (lower→upper)
   const palmGripDir = palmUpper.subtract(palmLower).normalize();
 
-  // 回転: weaponGripDir → palmGripDir
-  const alignRot = rotationBetweenVectors(weaponGripDir, palmGripDir);
+  // ─── Step 1: グリップ軸アラインメント ───
+  const rot1 = rotationBetweenVectors(weaponGripDir, palmGripDir);
 
-  // 回転後の武器グリップ中点
+  // ─── Step 2: ツイスト回転 (柄中心→グリップ点方向 を 手のひら内側Z+ に合わせる) ───
+  // 柄の中心軸 (pommel→tip方向)
+  const handleAxis = tip.subtract(pommel).normalize();
+  // グリップ点の柄中心軸からの垂直オフセット方向
+  const gripOnAxis = pommel.add(handleAxis.scale(Vector3.Dot(primaryGrip.subtract(pommel), handleAxis)));
+  const gripOffset = primaryGrip.subtract(gripOnAxis).normalize(); // 柄中心→グリップ点方向
+
+  // rot1 適用後の gripOffset 方向
+  const rotatedOffset = rotateVectorByQuat(gripOffset, rot1);
+
+  // 手のひら内側方向 = Z- in hand local (柄が手のひら側に来る向き)
+  const palmInward = new Vector3(0, 0, -1);
+
+  // rotatedOffset と palmInward を、palmGripDir軸に直交する平面に射影してツイスト角を計算
+  const projRotated = rotatedOffset.subtract(palmGripDir.scale(Vector3.Dot(rotatedOffset, palmGripDir))).normalize();
+  const projPalm = palmInward.subtract(palmGripDir.scale(Vector3.Dot(palmInward, palmGripDir))).normalize();
+
+  let rot2 = Quaternion.Identity();
+  if (projRotated.length() > 0.001 && projPalm.length() > 0.001) {
+    rot2 = rotationBetweenVectors(projRotated, projPalm);
+  }
+
+  // 合成回転: まず軸合わせ、次にツイスト
+  const finalRot = rot2.multiply(rot1);
+
+  // ─── 平行移動 ───
   const weaponMid = Vector3.Lerp(weaponPtTip, weaponPtPommel, 0.5);
-  // Quaternionでベクトルを回転
-  const rotConj = alignRot.clone(); rotConj.invertInPlace();
-  const wMidQ = alignRot.multiply(new Quaternion(weaponMid.x, weaponMid.y, weaponMid.z, 0)).multiply(rotConj);
-  const rotatedWeaponMid = new Vector3(wMidQ.x, wMidQ.y, wMidQ.z);
-
-  // 平行移動: 回転後の中点 → 手のひら中点
+  const rotatedWeaponMid = rotateVectorByQuat(weaponMid, finalRot);
   const translation = palmMid.subtract(rotatedWeaponMid);
 
   // weaponAttachRをidentityにリセットし、メッシュ自体に変換を適用
   character.weaponAttachR.position.set(0, 0, 0);
   character.weaponAttachR.rotationQuaternion = Quaternion.Identity();
-  mesh.rotationQuaternion = alignRot;
+  mesh.rotationQuaternion = finalRot;
   mesh.position.copyFrom(translation);
 
   // ─── WeaponPhysics ───
