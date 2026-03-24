@@ -412,13 +412,16 @@ export default function HavokTestPage() {
           attackPoint: new Vector3(0, -weaponLength, 0),
           gripOffset: Vector3.Zero(),
           offHandOffset: new Vector3(0, 0.2, 0),
+          localTipDir: Vector3.Down(),
+          localGripAxis: Vector3.Up(),
         };
         equipWeapon(scene, char, weapon, stance);
       }
     } else {
       unequipWeapon(char);
-      char.ikChains.rightArm.weight = 0;
+      // 画面右手=Mixamo leftArm, 画面左手=Mixamo rightArm
       char.ikChains.leftArm.weight = 0;
+      char.ikChains.rightArm.weight = 0;
     }
   }, [weaponEquipped, weaponWeight, weaponLength, gripType, stance, useAssetWeapon, selectedAssetWeapon, availableWeapons]);
 

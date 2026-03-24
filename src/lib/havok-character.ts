@@ -30,6 +30,12 @@ export interface WeaponPhysics {
   gripOffset: Vector3;
   /** 両手持ち時の左手位置 (weapon local, gripからの相対。柄の下端寄り) */
   offHandOffset: Vector3;
+  /** 武器メッシュローカル空間でのgrip→tip方向 (正規化) */
+  localTipDir: Vector3;
+  /** 武器メッシュローカル空間でのグリップ軸 (pommel側grip→tip側grip方向, 正規化) */
+  localGripAxis: Vector3;
+  /** true: メッシュに直接配置済み。setWeaponDirectionをスキップ */
+  directPlacement?: boolean;
 }
 
 export interface WeaponSwingState {
@@ -58,6 +64,8 @@ export function createDefaultWeapon(): WeaponPhysics {
     attackPoint: new Vector3(0, -1.0, 0),  // grip から先端方向 (local Y-)
     gripOffset: Vector3.Zero(),             // 武器メッシュ原点 = グリップ位置
     offHandOffset: new Vector3(0, 0.2, 0),  // grip から柄の下端側 20cm (local Y+)
+    localTipDir: Vector3.Down(),            // デバッグ用ボックスは Y- が先端
+    localGripAxis: Vector3.Up(),            // デバッグ用: pommel→tip方向 = Y+
   };
 }
 
@@ -73,21 +81,27 @@ export function createWeaponSwingState(): WeaponSwingState {
   };
 }
 
-/** キャラクターのボーン位置から方向ベクトルを算出 */
+/**
+ * キャラクターのボーン位置から画面上の方向ベクトルを算出。
+ * 重要: Babylon.js左手座標系ではMixamoの左右が画面上で反転する。
+ *   Mixamo RightShoulder → 画面左側, Mixamo LeftShoulder → 画面右側
+ * この関数は画面上の方向を返す (charRight = 画面上の右方向)。
+ */
 export function getCharacterDirections(character: HavokCharacter): {
   forward: Vector3; charRight: Vector3; charLeft: Vector3;
 } | null {
-  const rShoulder = character.allBones.get('mixamorig:RightShoulder');
-  const lShoulder = character.allBones.get('mixamorig:LeftShoulder');
-  if (!rShoulder || !lShoulder) return null;
+  const mixamoRShoulder = character.allBones.get('mixamorig:RightShoulder');
+  const mixamoLShoulder = character.allBones.get('mixamorig:LeftShoulder');
+  if (!mixamoRShoulder || !mixamoLShoulder) return null;
 
-  const rShoulderPos = getWorldPos(rShoulder);
-  const lShoulderPos = getWorldPos(lShoulder);
+  const mixamoRPos = getWorldPos(mixamoRShoulder);
+  const mixamoLPos = getWorldPos(mixamoLShoulder);
 
-  const charLeft = lShoulderPos.subtract(rShoulderPos).normalize();
-  charLeft.y = 0; charLeft.normalize();
-  const charRight = charLeft.scale(-1);
-  const forward = Vector3.Cross(charLeft, Vector3.Up()).normalize();
+  // Mixamo Left→Right方向 = 画面上の右方向 (Babylon.js左手座標系での反転)
+  const charRight = mixamoLPos.subtract(mixamoRPos).normalize();
+  charRight.y = 0; charRight.normalize();
+  const charLeft = charRight.scale(-1);
+  const forward = Vector3.Cross(charRight, Vector3.Up()).normalize();
 
   return { forward, charRight, charLeft };
 }
@@ -147,22 +161,19 @@ export function getStanceTargets(
     }
   }
 
-  // 右手IKターゲット: グリップ位置から手のひらオフセット分だけ肩方向に戻す
-  const rShoulderPos = getWorldPos(character.ikChains.rightArm.root);
-  const shoulderToGrip = gripPos.subtract(rShoulderPos).normalize();
+  // 右手IKターゲット: 画面右手 = Mixamo leftArm チェーン
+  const weaponShoulderPos = getWorldPos(character.ikChains.leftArm.root); // 画面右肩
+  const shoulderToGrip = gripPos.subtract(weaponShoulderPos).normalize();
   const rightTarget = gripPos.subtract(shoulderToGrip.scale(PALM_OFFSET));
 
-  // 左手IKターゲット: 武器の柄上の左手位置
+  // 左手IKターゲット (off-hand): 画面左手 = Mixamo rightArm チェーン
   let leftTarget: Vector3 | null = null;
   if (weapon.gripType === 'two-handed') {
-    // offHandOffset は weapon local (Y+ = grip→pommel方向)
-    // weapon local Y を weaponDir の逆方向にマッピング
-    const pommelDir = weaponDir.scale(-1); // grip→pommel = tip方向の逆
+    const pommelDir = weaponDir.scale(-1);
     const offHandWorld = gripPos.add(pommelDir.scale(weapon.offHandOffset.y));
-    // 左手のパームオフセット
-    const lShoulderPos = getWorldPos(character.ikChains.leftArm.root);
-    const lShoulderToOff = offHandWorld.subtract(lShoulderPos).normalize();
-    leftTarget = offHandWorld.subtract(lShoulderToOff.scale(PALM_OFFSET));
+    const offHandShoulderPos = getWorldPos(character.ikChains.rightArm.root); // 画面左肩
+    const offShoulderToOff = offHandWorld.subtract(offHandShoulderPos).normalize();
+    leftTarget = offHandWorld.subtract(offShoulderToOff.scale(PALM_OFFSET));
   }
 
   return { rightTarget, leftTarget, weaponDir };
@@ -840,15 +851,15 @@ export async function createHavokCharacter(
   // Body meshes (uses allBones for precise bone-length measurement)
   const bodyMeshes = createBodyMeshes(scene, allBones, bodyColor, prefix);
 
-  // Weapon attach points
+  // ─── Weapon attach points ───
+  // Babylon.js左手座標系: Mixamo Left = 画面右手, Mixamo Right = 画面左手
   const weaponAttachR = new TransformNode(`${prefix}_weaponR`, scene);
-  const rHand = combatBones.get('rightHand');
-  // 手のひら中心: Y+=指先方向0.064m, Z+=手のひら内側方向0.035m
-  if (rHand) { weaponAttachR.parent = rHand; weaponAttachR.position.set(0, 0.064, 0.035); }
+  const visualRightHand = combatBones.get('leftHand'); // Mixamo Left = 画面右手
+  if (visualRightHand) { weaponAttachR.parent = visualRightHand; weaponAttachR.position.set(0, 0.064, 0.035); }
 
   const weaponAttachL = new TransformNode(`${prefix}_weaponL`, scene);
-  const lHand = combatBones.get('leftHand');
-  if (lHand) { weaponAttachL.parent = lHand; weaponAttachL.position.set(0, 0.064, 0.035); }
+  const visualLeftHand = combatBones.get('rightHand'); // Mixamo Right = 画面左手
+  if (visualLeftHand) { weaponAttachL.parent = visualLeftHand; weaponAttachL.position.set(0, 0.064, 0.035); }
 
   // 手のひらデバッグ球: 親指付け根 + 小指根元 (両手)
   // bone-data.json localPos (FBX cm) → meters (scale=0.01)
@@ -857,14 +868,14 @@ export async function createHavokCharacter(
   palmMarkerMat.alpha = 0.8;
 
   const palmMarkerPositions: { hand: TransformNode | undefined; localPos: [number, number, number] }[] = [
-    // 右手: 人差し指根元寄り (Y少し手首側に)
-    { hand: allBones.get('mixamorig:RightHand'), localPos: [0.028, 0.100, 0.025] },
-    // 右手: 薬指根元寄り
-    { hand: allBones.get('mixamorig:RightHand'), localPos: [-0.022, 0.098, 0.025] },
-    // 左手: 人差し指根元寄り
+    // 画面右手 (=Mixamo LeftHand): 人差し指根元寄り
     { hand: allBones.get('mixamorig:LeftHand'), localPos: [-0.028, 0.100, 0.025] },
-    // 左手: 薬指根元寄り
+    // 画面右手 (=Mixamo LeftHand): 薬指根元寄り
     { hand: allBones.get('mixamorig:LeftHand'), localPos: [0.022, 0.098, 0.025] },
+    // 画面左手 (=Mixamo RightHand): 人差し指根元寄り
+    { hand: allBones.get('mixamorig:RightHand'), localPos: [0.028, 0.100, 0.025] },
+    // 画面左手 (=Mixamo RightHand): 薬指根元寄り
+    { hand: allBones.get('mixamorig:RightHand'), localPos: [-0.022, 0.098, 0.025] },
   ];
 
   for (const { hand, localPos } of palmMarkerPositions) {
@@ -1095,17 +1106,20 @@ function applyStance(character: HavokCharacter, stance: StanceType): void {
   swing.baseHandPos = rightTarget.clone();
   swing.smoothedTarget = rightTarget.clone();
 
-  character.ikChains.rightArm.target.copyFrom(rightTarget);
-  character.ikChains.rightArm.weight = 1;
+  // 画面右手 = Mixamo leftArm チェーン (weapon hand)
+  character.ikChains.leftArm.target.copyFrom(rightTarget);
+  character.ikChains.leftArm.weight = 1;
 
+  // 画面左手 = Mixamo rightArm チェーン (off-hand)
   if (weapon.gripType === 'two-handed' && leftTarget) {
-    character.ikChains.leftArm.target.copyFrom(leftTarget);
-    character.ikChains.leftArm.weight = 1;
+    character.ikChains.rightArm.target.copyFrom(leftTarget);
+    character.ikChains.rightArm.weight = 1;
   }
 
-  // 武器の向きを設定: weaponAttachRの回転で武器方向を制御
-  // weaponDir (world space) を weaponAttachR の親 (手ボーン) のローカル空間に変換
-  setWeaponDirection(character, weaponDir);
+  // 武器の向きを設定 (directPlacement の場合はメッシュに直接配置済みなのでスキップ)
+  if (!weapon.directPlacement) {
+    setWeaponDirection(character, weaponDir);
+  }
 
   const tipWorld = getWeaponTipWorld(character);
   swing.prevTipPos.copyFrom(tipWorld);
@@ -1115,14 +1129,17 @@ function applyStance(character: HavokCharacter, stance: StanceType): void {
 }
 
 /**
- * 武器の向きを設定する。
+ * 武器の向きを設定する (2軸アラインメント)。
  * weaponDir: 武器先端が向くワールド方向 (正規化)
- * weaponAttachRのローカルY-が先端方向になるよう回転を設定。
+ *
+ * 1. 武器の localTipDir を weaponDir に合わせる (tip方向)
+ * 2. 武器の localGripAxis を手のひらのグリップ軸に合わせる (ロール制御)
  */
 function setWeaponDirection(character: HavokCharacter, weaponDir: Vector3): void {
   const attach = character.weaponAttachR;
   const parent = attach.parent as TransformNode;
-  if (!parent) return;
+  const weapon = character.weapon;
+  if (!parent || !weapon) return;
 
   parent.computeWorldMatrix(true);
   const parentWorldRot = Quaternion.FromRotationMatrix(
@@ -1131,17 +1148,43 @@ function setWeaponDirection(character: HavokCharacter, weaponDir: Vector3): void
   const parentInv = parentWorldRot.clone();
   parentInv.invertInPlace();
 
-  // 武器のlocal Y- = 先端方向 → local Y+ = weaponDir の逆
-  // つまり local Y+ を -weaponDir に向ける回転が必要
-  const desiredUp = weaponDir.scale(-1); // local Y+ が向くべきワールド方向
-  const currentUp = Vector3.Up(); // デフォルトの local Y+
+  // ─── Step 1: tip方向を合わせる ───
+  const rot1 = rotationBetweenVectors(weapon.localTipDir, weaponDir);
 
-  // ワールド空間での回転
-  const worldRot = rotationBetweenVectors(currentUp, desiredUp);
+  // ─── Step 2: グリップ軸のロールを合わせる ───
+  // rot1 適用後の武器グリップ軸がどこを向くか計算
+  const rotatedGripAxis = weapon.localGripAxis.clone();
+  // Quaternion で回転: v' = q * v * q^-1
+  const rot1Conj = rot1.clone(); rot1Conj.invertInPlace();
+  const tempQ = rot1.multiply(new Quaternion(rotatedGripAxis.x, rotatedGripAxis.y, rotatedGripAxis.z, 0)).multiply(rot1Conj);
+  const rotatedGrip = new Vector3(tempQ.x, tempQ.y, tempQ.z).normalize();
+
+  // 手のひらのグリップ軸 (lower→upper) をワールド空間で計算
+  // 手のひらのポイントは hand local space なので、parent world rotation で変換
+  const palmUpper = PALM_GRIP_POINTS.left_upper;
+  const palmLower = PALM_GRIP_POINTS.left_lower;
+  const palmAxisLocal = palmUpper.subtract(palmLower).normalize();
+  // hand local → world
+  const palmAxisQ = parentWorldRot.multiply(
+    new Quaternion(palmAxisLocal.x, palmAxisLocal.y, palmAxisLocal.z, 0),
+  ).multiply(parentInv);
+  const palmAxisWorld = new Vector3(palmAxisQ.x, palmAxisQ.y, palmAxisQ.z).normalize();
+
+  // rotatedGrip を palmAxisWorld に合わせるツイスト回転 (weaponDir軸周り)
+  // rotatedGrip と palmAxisWorld を weaponDir に直交する平面に射影
+  const projRotated = rotatedGrip.subtract(weaponDir.scale(Vector3.Dot(rotatedGrip, weaponDir))).normalize();
+  const projPalm = palmAxisWorld.subtract(weaponDir.scale(Vector3.Dot(palmAxisWorld, weaponDir))).normalize();
+
+  let rot2 = Quaternion.Identity();
+  if (projRotated.length() > 0.001 && projPalm.length() > 0.001) {
+    rot2 = rotationBetweenVectors(projRotated, projPalm);
+  }
+
+  // 合成: まず tip方向を合わせ、次にツイスト
+  const worldRot = rot2.multiply(rot1);
 
   // 親のローカル空間に変換
   attach.rotationQuaternion = parentInv.multiply(worldRot);
-  // 位置は手のひら中心オフセット (createHavokCharacterで設定済み) を維持
 }
 
 /**
@@ -1244,33 +1287,75 @@ export async function equipGameAssetWeapon(
 
   // ─── 手のひら2点とのアラインメント ───
   // hand local space の2点
-  const palmUpper = PALM_GRIP_POINTS.right_upper; // 人差し指根元 = tip側
-  const palmLower = PALM_GRIP_POINTS.right_lower; // 薬指根元 = pommel側
+  // 画面右手 = Mixamo LeftHand → left_* ポイントを使用
+  const palmUpper = PALM_GRIP_POINTS.left_upper; // 人差し指根元 = tip側
+  const palmLower = PALM_GRIP_POINTS.left_lower; // 薬指根元 = pommel側
   const palmMid = Vector3.Lerp(palmUpper, palmLower, 0.5);
 
   // 武器グリップ軸 (pommel側 → tip側) と 手のひら軸 (lower → upper)
   const weaponGripAxis = gripTipSide.subtract(gripPommelSide).normalize();
   const palmGripAxis = palmUpper.subtract(palmLower).normalize();
 
-  // ─── メッシュ構築: primaryGrip を原点、grip→tip を local Y- ───
+  // ─── メッシュ構築: primaryGrip を原点 (回転なし) ───
   const gripToTip = tip.subtract(primaryGrip).normalize();
   const mesh = buildVoxWeaponMesh(scene, model, primaryGrip, gripToTip, character.root.name);
-  // buildVoxWeaponMesh は grip→tip を Y- に揃える回転を適用済み
 
-  // ─── equipWeapon を使って装備 (既存の仕組みを活用) ───
+  // ─── 2点アラインメント: 武器グリップ2点 → 手のひら2点 ───
+  // 武器グリップ点 (mesh local, primaryGrip=原点)
+  const wA = gripTipSide.subtract(primaryGrip).scale(VOX_SCALE / VOX_SCALE); // already in meters via v2m
+  // wait - gripTipSide is already in meters from v2m, and primaryGrip is mesh origin
+  const weaponPtTip = gripTipSide.subtract(primaryGrip);   // tip側grip in mesh local
+  const weaponPtPommel = gripPommelSide.subtract(primaryGrip); // pommel側grip in mesh local
+
+  // 武器グリップ軸 (pommel→tip)
+  const weaponGripDir = weaponPtTip.subtract(weaponPtPommel).normalize();
+  // 手のひらグリップ軸 (lower→upper)
+  const palmGripDir = palmUpper.subtract(palmLower).normalize();
+
+  // 回転: weaponGripDir → palmGripDir
+  const alignRot = rotationBetweenVectors(weaponGripDir, palmGripDir);
+
+  // 回転後の武器グリップ中点
+  const weaponMid = Vector3.Lerp(weaponPtTip, weaponPtPommel, 0.5);
+  // Quaternionでベクトルを回転
+  const rotConj = alignRot.clone(); rotConj.invertInPlace();
+  const wMidQ = alignRot.multiply(new Quaternion(weaponMid.x, weaponMid.y, weaponMid.z, 0)).multiply(rotConj);
+  const rotatedWeaponMid = new Vector3(wMidQ.x, wMidQ.y, wMidQ.z);
+
+  // 平行移動: 回転後の中点 → 手のひら中点
+  const translation = palmMid.subtract(rotatedWeaponMid);
+
+  // weaponAttachRをidentityにリセットし、メッシュ自体に変換を適用
+  character.weaponAttachR.position.set(0, 0, 0);
+  character.weaponAttachR.rotationQuaternion = Quaternion.Identity();
+  mesh.rotationQuaternion = alignRot;
+  mesh.position.copyFrom(translation);
+
+  // ─── WeaponPhysics ───
   const weapon: WeaponPhysics = {
-    weight: info.weight / 1000, // grams → kg
+    weight: info.weight / 1000,
     length,
     gripType: info.defaultGrip === 'two_hand' ? 'two-handed' : 'one-handed',
     attackPoint: new Vector3(0, -length, 0),
     gripOffset: Vector3.Zero(),
     offHandOffset: new Vector3(0, pommelDist * 0.3, 0),
+    localTipDir: gripToTip,
+    localGripAxis: weaponGripDir,
+    directPlacement: true,
   };
 
-  // weaponAttachR の位置を手のひら中点に設定
-  character.weaponAttachR.position.copyFrom(palmMid);
+  // equipWeaponを使うがsetWeaponDirectionは適用しない (メッシュに直接配置済み)
+  // 既存の武器を破棄
+  if (character.weaponMesh) {
+    character.weaponMesh.dispose();
+    character.weaponMesh = null;
+  }
+  character.weapon = weapon;
+  mesh.parent = character.weaponAttachR;
+  character.weaponMesh = mesh;
 
-  equipWeapon(scene, character, weapon, stance, mesh);
+  // IKターゲットのみ applyStance で設定
+  applyStance(character, stance);
 }
 
 /**
@@ -1337,14 +1422,8 @@ function buildVoxWeaponMesh(
   mesh.material = mat;
   mesh.hasVertexAlpha = false;
 
-  // grip→tip方向をローカルY-に揃える回転
-  // 現在のメッシュは vox 座標系 (grip原点)、localDir = grip→tip方向
-  // weaponAttachR の ローカルY- を先端方向にしたいので
-  // localDir を -Y に向ける回転を適用
-  const targetDir = Vector3.Down(); // Y-
-  const rot = rotationBetweenVectors(localDir, targetDir);
-  mesh.rotationQuaternion = rot;
-
+  // メッシュ回転なし: 武器の向きは setWeaponDirection で一括制御
+  // localDir (grip→tip方向) は WeaponPhysics.localTipDir に記録して使う
   return mesh;
 }
 
@@ -1369,25 +1448,22 @@ export function updateWeaponInertia(
   desiredTarget: Vector3,
   dt: number,
 ): void {
+  // 画面右手 = Mixamo leftArm チェーン
   const weapon = character.weapon;
   if (!weapon) {
-    character.ikChains.rightArm.target.copyFrom(desiredTarget);
+    character.ikChains.leftArm.target.copyFrom(desiredTarget);
     return;
   }
 
   const swing = character.weaponSwing;
 
-  // 慣性係数: weight が大きいほど追従が遅い
-  // lerpFactor = 1/(1 + weight*2) → weight=1: 0.33, weight=3: 0.14, weight=5: 0.09
   const inertiaFactor = 1.0 / (1.0 + weapon.weight * 2.0);
-  const lerpSpeed = inertiaFactor * 10.0; // 基本速度
+  const lerpSpeed = inertiaFactor * 10.0;
   const t = Math.min(1.0, lerpSpeed * dt);
 
-  // 慣性で遅延したターゲット位置
   Vector3.LerpToRef(swing.smoothedTarget, desiredTarget, t, swing.smoothedTarget);
 
-  // IKターゲットに適用
-  character.ikChains.rightArm.target.copyFrom(swing.smoothedTarget);
+  character.ikChains.leftArm.target.copyFrom(swing.smoothedTarget);
 }
 
 /**
@@ -1437,24 +1513,21 @@ export function endSwing(character: HavokCharacter): number {
 }
 
 /**
- * 両手持ち武器で片手に切替: 左手IK weight=0 でリーチ拡張。
- * release=true で片手持ち(左手フリー)、false で両手持ちに戻す。
+ * 両手持ち武器で画面左手(off-hand)を切替。
+ * release=true で片手持ち(off-hand フリー)、false で両手持ちに戻す。
+ * 画面左手 = Mixamo rightArm チェーン
  */
 export function releaseOffHand(character: HavokCharacter, release: boolean): void {
   const weapon = character.weapon;
   if (!weapon || weapon.gripType !== 'two-handed') return;
 
   if (release) {
-    // 左手IKオフ → 片手持ちでリーチ拡張
-    character.ikChains.leftArm.weight = 0;
+    character.ikChains.rightArm.weight = 0;
   } else {
-    // 両手持ちに戻す: 左手を武器の下端付近にIKで追従
-    character.ikChains.leftArm.weight = 1;
-    // 左手ターゲット = 武器の中間あたり (grip寄り)
+    character.ikChains.rightArm.weight = 1;
     const tipWorld = getWeaponTipWorld(character);
     const handWorld = getWorldPos(character.weaponAttachR);
-    // 武器の30%位置 (grip寄り) に左手を配置
-    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.leftArm.target);
+    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.rightArm.target);
   }
 }
 
@@ -1476,16 +1549,15 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   // Weapon power calculation
   updateWeaponPower(character, dt ?? (1 / 60));
 
-  // 両手持ち時の左手追従: 武器の柄上 offHandOffset の位置にIKで追従
+  // 両手持ち時の画面左手(off-hand)追従: Mixamo rightArm チェーン
   if (character.weapon && character.weapon.gripType === 'two-handed'
-      && character.ikChains.leftArm.weight > 0) {
+      && character.ikChains.rightArm.weight > 0) {
     character.weaponAttachR.computeWorldMatrix(true);
     const offLocal = character.weapon.offHandOffset;
     const offWorld = Vector3.TransformCoordinates(offLocal, character.weaponAttachR.getWorldMatrix());
-    // パームオフセット補正
-    const lShoulderPos = getWorldPos(character.ikChains.leftArm.root);
-    const dir = offWorld.subtract(lShoulderPos).normalize();
-    character.ikChains.leftArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
+    const offShoulderPos = getWorldPos(character.ikChains.rightArm.root); // 画面左肩
+    const dir = offWorld.subtract(offShoulderPos).normalize();
+    character.ikChains.rightArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
   }
 
   // Center of mass
