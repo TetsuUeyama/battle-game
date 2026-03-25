@@ -14,6 +14,9 @@ import {
   fetchGameAssetWeapons, equipGameAssetWeapon,
   getCharacterDirections, getStanceTargets,
   createTarget, createSwingMotion, updateSwingMotion, applyBodyMotion,
+  createCombatAI, updateCombatAI,
+  createTargetMover, updateTargetMover,
+  type CombatAI, type TargetMover,
   type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
   type SwingMotion, type SwingType,
 } from '@/lib/havok-character';
@@ -159,6 +162,9 @@ export default function HavokTestPage() {
   // Attack motion
   const [swingTypeSelect, setSwingTypeSelect] = useState<SwingType>('vertical');
   const [attackPower, setAttackPower] = useState(100);
+  // Combat AI
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [aiState, setAiState] = useState<string>('idle');
 
   // Refs for scene objects
   const characterRef = useRef<HavokCharacter | null>(null);
@@ -241,10 +247,14 @@ export default function HavokTestPage() {
     new HemisphericLight('hemi', new Vector3(0, 1, 0), scene).intensity = 0.5;
     new DirectionalLight('dir', new Vector3(-1, -2, 1), scene).intensity = 0.8;
 
-    const ground = MeshBuilder.CreateGround('ground', { width: 8, height: 8 }, scene);
+    const ground = MeshBuilder.CreateGround('ground', { width: 10, height: 10 }, scene);
     const gMat = new StandardMaterial('gMat', scene);
     gMat.diffuseColor = new Color3(0.3, 0.3, 0.25);
     ground.material = gMat;
+
+    // AI state (useEffectスコープ、async内とrenderLoop両方からアクセス可能)
+    let _targetMover: TargetMover | null = null;
+    let _combatAI: CombatAI | null = null;
 
     (async () => {
       try {
@@ -287,8 +297,22 @@ export default function HavokTestPage() {
         if (targetDirs) {
           const charPos = character.root.position;
           const targetPos = charPos.add(targetDirs.forward.scale(1.5));
-          createTarget(scene, targetPos, 'target');
+          const targetObj = createTarget(scene, targetPos, 'target');
+          _targetMover = createTargetMover(targetObj.root, charPos, 3.0);
         }
+
+        // AI toggle callback
+        (window as unknown as Record<string, unknown>).__toggleAI = (enabled: boolean) => {
+          if (enabled && _targetMover && character.weapon) {
+            _combatAI = createCombatAI(_targetMover.node, character.weapon);
+            _combatAI.enabled = true;
+          } else if (_combatAI) {
+            _combatAI.enabled = false;
+            _combatAI.state = 'idle';
+          }
+        };
+        // AI state callback
+        (window as unknown as Record<string, unknown>).__getAIState = () => _combatAI?.state ?? 'idle';
 
         // Store base values for initial bone
         storeBaseValues(SELECTABLE_BONES[0]);
@@ -331,6 +355,18 @@ export default function HavokTestPage() {
       startSwing(c);
     };
 
+    // AI state HUD callback
+    (window as unknown as Record<string, unknown>).__setAIStateHud = (s: string) => {
+      // Throttle: only update every 200ms
+      const now = Date.now();
+      if (now - (_lastAIUpdate ?? 0) > 200) {
+        _lastAIUpdate = now;
+        const fn = (window as unknown as Record<string, unknown>).__aiStateSetFn as ((s: string) => void) | undefined;
+        if (fn) fn(s);
+      }
+    };
+    let _lastAIUpdate = 0;
+
     let prevTime = performance.now();
 
     engine.runRenderLoop(() => {
@@ -356,8 +392,14 @@ export default function HavokTestPage() {
         }
       }
 
-      // スイングモーション or 手動オフセット
-      if (char && char.weapon) {
+      // ─── Target mover + Combat AI ───
+      if (_targetMover) updateTargetMover(_targetMover, dt);
+      if (_combatAI && _combatAI.enabled && char) {
+        updateCombatAI(_combatAI, char, dt);
+      }
+
+      // スイングモーション or 手動オフセット (AI無効時のみ手動制御)
+      if (char && char.weapon && (!_combatAI || !_combatAI.enabled)) {
         if (_currentMotion && _currentMotion.active) {
           // スイングモーション中: 慣性バイパス
           const frame = updateSwingMotion(_currentMotion, dt);
@@ -397,6 +439,11 @@ export default function HavokTestPage() {
         if (_weaponHudCb && char.weapon) {
           _weaponHudCb(char.weaponSwing.tipSpeed, char.weaponSwing.power);
         }
+        // AI state HUD
+        if (_combatAI) {
+          const fn = (window as unknown as Record<string, unknown>).__setAIStateHud as ((s: string) => void) | undefined;
+          if (fn) fn(_combatAI.state);
+        }
       }
       scene.render();
     });
@@ -416,6 +463,17 @@ export default function HavokTestPage() {
     const fn = (window as unknown as Record<string, unknown>).__setHipsOffset as ((v: number) => void) | undefined;
     if (fn) fn(hipsHeight);
   }, [hipsHeight]);
+
+  // AI state HUD
+  useEffect(() => {
+    (window as unknown as Record<string, unknown>).__aiStateSetFn = (s: string) => setAiState(s);
+  }, []);
+
+  // AI toggle
+  useEffect(() => {
+    const fn = (window as unknown as Record<string, unknown>).__toggleAI as ((e: boolean) => void) | undefined;
+    if (fn) fn(aiEnabled);
+  }, [aiEnabled]);
 
   // Fetch available game-asset weapons
   useEffect(() => {
@@ -769,6 +827,30 @@ export default function HavokTestPage() {
               </div>
             </div>
           </>)}
+        </div>
+
+        {/* ── Combat AI ── */}
+        <div style={{ marginBottom: 8, borderTop: '2px solid #0cf', paddingTop: 8 }}>
+          <b style={{ color: '#0cf' }}>Combat AI</b>
+          <div style={{ marginTop: 4 }}>
+            <label>
+              <input type="checkbox" checked={aiEnabled}
+                onChange={e => setAiEnabled(e.target.checked)} />
+              {' '}AI 自動追尾 & 攻撃
+            </label>
+          </div>
+          {aiEnabled && (
+            <div style={{ marginTop: 4, padding: 6, background: 'rgba(0,200,255,0.1)', borderRadius: 4 }}>
+              <div style={{ fontSize: 12 }}>
+                State: <b style={{ color: aiState === 'attack' ? '#f44' : aiState === 'pursue' ? '#ff0' : '#0f0' }}>
+                  {aiState.toUpperCase()}
+                </b>
+              </div>
+              <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+                標的がランダム移動 → 追尾 → 射程内で攻撃 → 回復 → 繰り返し
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Reset button */}

@@ -110,6 +110,23 @@ export function getCharacterDirections(character: HavokCharacter): {
 const PALM_OFFSET = 0.064;
 
 /**
+ * 片手武器時のオフハンド(画面左手)の自然な休息位置を計算。
+ * 腰の横、やや前方に手を下げた位置。
+ */
+export function getOffHandRestPosition(character: HavokCharacter): Vector3 | null {
+  const dirs = getCharacterDirections(character);
+  const hips = character.combatBones.get('hips');
+  if (!dirs || !hips) return null;
+
+  const hipsPos = getWorldPos(hips);
+  // 画面左手側 = charLeft 方向
+  return hipsPos
+    .add(dirs.charLeft.scale(0.2))     // 左腰の横
+    .add(dirs.forward.scale(0.08))     // やや前方
+    .add(new Vector3(0, -0.15, 0));    // 腰より下
+}
+
+/**
  * 構えごとのグリップ位置・武器方向・左手位置を算出。
  * 戻り値:
  *   gripPos: グリップのワールド位置 (右手IKターゲットの基準)
@@ -1277,6 +1294,13 @@ function applyStance(character: HavokCharacter, stance: StanceType): void {
   if (weapon.gripType === 'two-handed' && leftTarget) {
     character.ikChains.rightArm.target.copyFrom(leftTarget);
     character.ikChains.rightArm.weight = 1;
+  } else {
+    // 片手武器: オフハンドを自然な位置に (腰の横、やや前方)
+    const offHandPos = getOffHandRestPosition(character);
+    if (offHandPos) {
+      character.ikChains.rightArm.target.copyFrom(offHandPos);
+      character.ikChains.rightArm.weight = 1;
+    }
   }
 
   // 武器の向きを設定 (directPlacement の場合はメッシュに直接配置済みなのでスキップ)
@@ -1737,15 +1761,25 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   // Weapon power calculation
   updateWeaponPower(character, dt ?? (1 / 60));
 
-  // 両手持ち時の画面左手(off-hand)追従: Mixamo rightArm チェーン
-  if (character.weapon && character.weapon.gripType === 'two-handed'
-      && character.ikChains.rightArm.weight > 0) {
-    character.weaponAttachR.computeWorldMatrix(true);
-    const offLocal = character.weapon.offHandOffset;
-    const offWorld = Vector3.TransformCoordinates(offLocal, character.weaponAttachR.getWorldMatrix());
-    const offShoulderPos = getWorldPos(character.ikChains.rightArm.root); // 画面左肩
-    const dir = offWorld.subtract(offShoulderPos).normalize();
-    character.ikChains.rightArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
+  // 画面左手(off-hand) = Mixamo rightArm チェーン
+  if (character.weapon && character.ikChains.rightArm.weight > 0) {
+    if (character.weapon.gripType === 'two-handed') {
+      // 両手持ち: 武器の柄に追従
+      character.weaponAttachR.computeWorldMatrix(true);
+      const offLocal = character.weapon.offHandOffset;
+      const offWorld = Vector3.TransformCoordinates(offLocal, character.weaponAttachR.getWorldMatrix());
+      const offShoulderPos = getWorldPos(character.ikChains.rightArm.root);
+      const dir = offWorld.subtract(offShoulderPos).normalize();
+      character.ikChains.rightArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
+    } else {
+      // 片手武器: 自然な休息位置に毎フレーム更新
+      const restPos = getOffHandRestPosition(character);
+      if (restPos) {
+        // 現在ターゲットから滑らかに追従 (急激に動かない)
+        const current = character.ikChains.rightArm.target;
+        Vector3.LerpToRef(current, restPos, Math.min(1, 8 * deltaTime), current);
+      }
+    }
   }
 
   // Center of mass
@@ -1775,6 +1809,8 @@ export interface BodyMotion {
   hipsForward: number;
   /** 右足(画面右)の前方踏み出し (m) */
   footStepR: number;
+  /** オフハンド(画面左手)のオフセット [forward, up, right] (m) */
+  offHandOffset: Vector3;
 }
 
 export interface SwingMotion {
@@ -1796,7 +1832,7 @@ export interface SwingMotion {
 
 /** ニュートラルなボディモーション */
 function neutralBody(): BodyMotion {
-  return { torsoLean: 0, torsoTwist: 0, hipsOffset: 0, hipsForward: 0, footStepR: 0 };
+  return { torsoLean: 0, torsoTwist: 0, hipsOffset: 0, hipsForward: 0, footStepR: 0, offHandOffset: Vector3.Zero() };
 }
 
 /**
@@ -1942,50 +1978,56 @@ export function createSwingMotion(
   switch (type) {
     case 'vertical':
       windupBody = {
-        torsoLean: -0.15 * p,   // 後傾
-        torsoTwist: 0.1 * p,    // やや右回転
-        hipsOffset: 0.02 * p,   // 少し持ち上がる
-        hipsForward: -0.03 * p, // 後退
-        footStepR: -0.05 * p,   // 右足やや後退
+        torsoLean: -0.15 * p,
+        torsoTwist: 0.1 * p,
+        hipsOffset: 0.02 * p,
+        hipsForward: -0.03 * p,
+        footStepR: -0.05 * p,
+        offHandOffset: new Vector3(-0.05 * p, 0.1 * p, -0.05 * p), // 後方に引く
       };
       strikeBody = {
-        torsoLean: 0.35 * p,    // 大きく前傾
-        torsoTwist: -0.05 * p,  // わずかに左回転
-        hipsOffset: -0.08 * p,  // しゃがみ
-        hipsForward: 0.08 * p,  // 前方へ
-        footStepR: 0.12 * p,    // 右足踏み込み
+        torsoLean: 0.35 * p,
+        torsoTwist: -0.05 * p,
+        hipsOffset: -0.08 * p,
+        hipsForward: 0.08 * p,
+        footStepR: 0.12 * p,
+        offHandOffset: new Vector3(0.1 * p, -0.1 * p, 0.05 * p), // 前方に振り出す
       };
       break;
     case 'horizontal':
       windupBody = {
         torsoLean: 0,
-        torsoTwist: 0.35 * p,   // 右に大きくひねり
+        torsoTwist: 0.35 * p,
         hipsOffset: 0,
         hipsForward: -0.02 * p,
-        footStepR: 0.05 * p,    // 右足開く
+        footStepR: 0.05 * p,
+        offHandOffset: new Vector3(-0.1 * p, 0.05 * p, -0.08 * p), // 右側に引く
       };
       strikeBody = {
-        torsoLean: 0.1 * p,     // やや前傾
-        torsoTwist: -0.3 * p,   // 左へひねり (フォロースルー)
+        torsoLean: 0.1 * p,
+        torsoTwist: -0.3 * p,
         hipsOffset: -0.03 * p,
         hipsForward: 0.05 * p,
-        footStepR: -0.03 * p,   // 右足戻る
+        footStepR: -0.03 * p,
+        offHandOffset: new Vector3(0.15 * p, -0.05 * p, 0.1 * p), // 左側にフォロースルー
       };
       break;
     case 'thrust':
       windupBody = {
-        torsoLean: -0.1 * p,    // 後傾 (引き)
+        torsoLean: -0.1 * p,
         torsoTwist: 0.1 * p,
         hipsOffset: 0.02 * p,
-        hipsForward: -0.08 * p, // 後退
-        footStepR: -0.08 * p,   // 右足後退
+        hipsForward: -0.08 * p,
+        footStepR: -0.08 * p,
+        offHandOffset: new Vector3(-0.08 * p, 0.05 * p, -0.1 * p), // 後方に引く
       };
       strikeBody = {
-        torsoLean: 0.25 * p,    // 前傾 (突き出し)
+        torsoLean: 0.25 * p,
         torsoTwist: -0.05 * p,
         hipsOffset: -0.04 * p,
-        hipsForward: 0.15 * p,  // 大きく前方
-        footStepR: 0.18 * p,    // 右足大きく踏み込み
+        hipsForward: 0.15 * p,
+        footStepR: 0.18 * p,
+        offHandOffset: new Vector3(0.05 * p, -0.08 * p, 0), // バランス取り
       };
       break;
   }
@@ -2023,6 +2065,7 @@ function lerpBody(a: BodyMotion, b: BodyMotion, t: number): BodyMotion {
     hipsOffset: a.hipsOffset + (b.hipsOffset - a.hipsOffset) * t,
     hipsForward: a.hipsForward + (b.hipsForward - a.hipsForward) * t,
     footStepR: a.footStepR + (b.footStepR - a.footStepR) * t,
+    offHandOffset: Vector3.Lerp(a.offHandOffset, b.offHandOffset, t),
   };
 }
 
@@ -2090,6 +2133,274 @@ export function applyBodyMotion(
     hipsBone.position.addInPlace(hipsMove);
   }
 
-  // 足のステップは updateFootStepping (updateHavokCharacter内) が自動処理
-  // 腰が動けばステッピングシステムが自動的に足を追従させる
+  // オフハンド(画面左手)の揺れ: 休息位置にオフセットを加算
+  if (character.weapon && character.weapon.gripType === 'one-handed'
+      && character.ikChains.rightArm.weight > 0) {
+    const restPos = getOffHandRestPosition(character);
+    if (restPos) {
+      // offHandOffset: [forward, up, right] を実際の方向に変換
+      const offset = forward.scale(body.offHandOffset.x)
+        .add(Vector3.Up().scale(body.offHandOffset.y))
+        .add(charRight.scale(body.offHandOffset.z));
+      character.ikChains.rightArm.target.copyFrom(restPos.add(offset));
+    }
+  }
+}
+
+// ─── Combat AI / Locomotion ──────────────────────────────
+
+export type CombatAIState = 'idle' | 'pursue' | 'attack' | 'recover';
+
+export interface CombatAI {
+  state: CombatAIState;
+  /** 標的の TransformNode */
+  targetNode: TransformNode;
+  /** 攻撃射程 (m) */
+  attackRange: number;
+  /** 追尾開始距離 (m) */
+  pursueRange: number;
+  /** 歩き速度 (m/s) */
+  walkSpeed: number;
+  /** 走り速度 (m/s) */
+  runSpeed: number;
+  /** 走り切替距離 (m, これ以上離れていたら走る) */
+  runThreshold: number;
+  /** 攻撃後の回復時間 (秒) */
+  recoverTime: number;
+  /** 回復タイマー */
+  recoverTimer: number;
+  /** 現在のスイングモーション */
+  currentMotion: SwingMotion | null;
+  /** 攻撃タイプのローテーション */
+  attackIndex: number;
+  /** 有効か */
+  enabled: boolean;
+}
+
+/**
+ * CombatAI を作成
+ */
+export function createCombatAI(targetNode: TransformNode, weapon: WeaponPhysics): CombatAI {
+  return {
+    state: 'idle',
+    targetNode,
+    attackRange: weapon.length * 0.9,
+    pursueRange: 5.0,
+    walkSpeed: 1.0,
+    runSpeed: 2.5,
+    runThreshold: 2.0,
+    recoverTime: 0.8,
+    recoverTimer: 0,
+    currentMotion: null,
+    attackIndex: 0,
+    enabled: false,
+  };
+}
+
+/** 標的のランダム移動 */
+export interface TargetMover {
+  node: TransformNode;
+  waypoint: Vector3;
+  speed: number;
+  changeTimer: number;
+  changeInterval: number;
+  boundsMin: Vector3;
+  boundsMax: Vector3;
+}
+
+export function createTargetMover(node: TransformNode, center: Vector3, range: number): TargetMover {
+  return {
+    node,
+    waypoint: node.position.clone(),
+    speed: 0.8,
+    changeTimer: 0,
+    changeInterval: 2.0,
+    boundsMin: center.add(new Vector3(-range, 0, -range)),
+    boundsMax: center.add(new Vector3(range, 0, range)),
+  };
+}
+
+export function updateTargetMover(mover: TargetMover, dt: number): void {
+  mover.changeTimer += dt;
+  if (mover.changeTimer >= mover.changeInterval) {
+    mover.changeTimer = 0;
+    // 新しいランダムウェイポイント
+    mover.waypoint = new Vector3(
+      mover.boundsMin.x + Math.random() * (mover.boundsMax.x - mover.boundsMin.x),
+      0,
+      mover.boundsMin.z + Math.random() * (mover.boundsMax.z - mover.boundsMin.z),
+    );
+  }
+
+  // ウェイポイントに向かって移動
+  const pos = mover.node.position;
+  const toWp = mover.waypoint.subtract(pos);
+  toWp.y = 0;
+  const dist = toWp.length();
+  if (dist > 0.05) {
+    const dir = toWp.normalize();
+    const step = Math.min(dist, mover.speed * dt);
+    pos.addInPlace(dir.scale(step));
+  }
+}
+
+/**
+ * CombatAI 更新。毎フレーム呼び出し。
+ * キャラクターの移動・回転・攻撃を自動制御する。
+ */
+export function updateCombatAI(
+  ai: CombatAI,
+  character: HavokCharacter,
+  dt: number,
+): void {
+  if (!ai.enabled || !character.weapon) return;
+
+  const targetPos = ai.targetNode.position.clone();
+  targetPos.y = 0;
+  const charPos = character.root.position.clone();
+  charPos.y = 0;
+
+  const toTarget = targetPos.subtract(charPos);
+  const dist = toTarget.length();
+  const dir = dist > 0.01 ? toTarget.normalize() : Vector3.Forward();
+
+  // ─── キャラクターを標的に向ける ───
+  const dirs = getCharacterDirections(character);
+  if (dirs) {
+    const currentFwd = dirs.forward;
+    const targetAngle = Math.atan2(dir.x, dir.z);
+    const currentAngle = Math.atan2(currentFwd.x, currentFwd.z);
+    let angleDiff = targetAngle - currentAngle;
+    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+    const turnSpeed = 5.0; // rad/s
+    const turnAmount = Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), turnSpeed * dt);
+
+    if (Math.abs(turnAmount) > 0.0001) {
+      // Quaternionで回転を適用 (root.rotationQuaternionがnullならEulerから変換)
+      const rotDelta = Quaternion.RotationAxis(Vector3.Up(), turnAmount);
+      if (character.root.rotationQuaternion) {
+        character.root.rotationQuaternion = rotDelta.multiply(character.root.rotationQuaternion);
+      } else {
+        character.root.rotationQuaternion = rotDelta.multiply(
+          Quaternion.FromEulerAngles(character.root.rotation.x, character.root.rotation.y, character.root.rotation.z),
+        );
+      }
+
+      // 足の接地位置をroot中心で回転させる
+      const rootPos = character.root.position;
+      const rotQuat = rotDelta;
+      const stepper = character.footStepper;
+
+      for (const foot of [stepper.left, stepper.right]) {
+        // planted位置をroot中心に回転
+        const rel = foot.planted.subtract(rootPos);
+        const rotated = rotateVectorByQuat(rel, rotQuat);
+        foot.planted.copyFrom(rootPos.add(rotated));
+
+        // ステップ中のtargetも回転
+        if (foot.stepping) {
+          const relT = foot.target.subtract(rootPos);
+          const rotatedT = rotateVectorByQuat(relT, rotQuat);
+          foot.target.copyFrom(rootPos.add(rotatedT));
+        }
+      }
+
+      // footPlant (legacy) も更新
+      if (character.footPlant.leftLocked) {
+        character.footPlant.leftLocked.copyFrom(stepper.left.planted);
+      }
+      if (character.footPlant.rightLocked) {
+        character.footPlant.rightLocked.copyFrom(stepper.right.planted);
+      }
+
+      // 足の向きも回転に追従: footBaseWorldRot を回転
+      character.footBaseWorldRot.left = rotQuat.multiply(character.footBaseWorldRot.left);
+      character.footBaseWorldRot.right = rotQuat.multiply(character.footBaseWorldRot.right);
+    }
+  }
+
+  // ─── 状態遷移 ───
+  switch (ai.state) {
+    case 'idle': {
+      if (dist < ai.pursueRange) {
+        ai.state = 'pursue';
+      }
+      break;
+    }
+
+    case 'pursue': {
+      // 移動中も構え位置を更新
+      if (character.weapon) {
+        const stanceNow = getStanceTargets(character, character.weaponSwing.stance, character.weapon);
+        character.weaponSwing.baseHandPos.copyFrom(stanceNow.rightTarget);
+        updateWeaponInertia(character, stanceNow.rightTarget, dt);
+      }
+
+      if (dist <= ai.attackRange) {
+        // 攻撃射程内 → 攻撃開始
+        ai.state = 'attack';
+        const types: SwingType[] = ['vertical', 'horizontal', 'thrust'];
+        const swingType = types[ai.attackIndex % types.length];
+        ai.attackIndex++;
+        const power = 60 + Math.random() * 40; // 60-100%
+        const hitPos = targetPos.add(new Vector3(0, 1.1, 0));
+        ai.currentMotion = createSwingMotion(character, hitPos, swingType, power);
+        startSwing(character);
+      } else {
+        // 移動: 遠ければ走り、近ければ歩き
+        const speed = dist > ai.runThreshold ? ai.runSpeed : ai.walkSpeed;
+        const moveAmount = Math.min(dist - ai.attackRange * 0.8, speed * dt);
+        if (moveAmount > 0) {
+          character.root.position.addInPlace(dir.scale(moveAmount));
+        }
+      }
+      break;
+    }
+
+    case 'attack': {
+      if (ai.currentMotion && ai.currentMotion.active) {
+        // スイングモーション進行
+        const frame = updateSwingMotion(ai.currentMotion, dt);
+        if (frame) {
+          // 手のIKターゲット (画面右手 = Mixamo leftArm)
+          character.ikChains.leftArm.target.copyFrom(frame.handTarget);
+          character.weaponSwing.smoothedTarget.copyFrom(frame.handTarget);
+          // ボディモーション
+          if (dirs) {
+            applyBodyMotion(character, frame.body, dirs.forward, dirs.charRight);
+          }
+        }
+      }
+      if (!ai.currentMotion || !ai.currentMotion.active) {
+        // 攻撃終了 → 回復
+        ai.state = 'recover';
+        ai.recoverTimer = ai.recoverTime;
+        ai.currentMotion = null;
+        endSwing(character);
+        // 胴体リセット
+        const spine = character.allBones.get('mixamorig:Spine1');
+        if (spine) {
+          const baseRot = character.ikBaseRotations.get(spine.name);
+          if (baseRot) spine.rotationQuaternion = baseRot.root.clone();
+        }
+      }
+      break;
+    }
+
+    case 'recover': {
+      // 回復中も構え位置を更新
+      if (character.weapon) {
+        const stanceNow = getStanceTargets(character, character.weaponSwing.stance, character.weapon);
+        character.weaponSwing.baseHandPos.copyFrom(stanceNow.rightTarget);
+        updateWeaponInertia(character, stanceNow.rightTarget, dt);
+      }
+      ai.recoverTimer -= dt;
+      if (ai.recoverTimer <= 0) {
+        ai.state = 'pursue';
+      }
+      break;
+    }
+  }
 }
