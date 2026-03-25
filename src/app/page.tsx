@@ -9,6 +9,7 @@ const pages = [
   { href: '/water-gun', title: 'Water Gun', desc: '水鉄砲パーティクルFXプロトタイプ（水・血・毒）' },
   { href: '/battle-royale', title: 'Battle Royale', desc: '108人バトルロイヤル（1発KO・最後の1人まで）' },
   { href: '/field', title: 'Field Viewer', desc: 'ボクセル地形ビューワー' },
+  { href: '/havok-test', title: 'Havok Test', desc: 'Havok物理キャラクター / 武器装備・構え・スイングモーション確認' },
 ];
 
 export default function Home() {

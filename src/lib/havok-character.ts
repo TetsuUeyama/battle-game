@@ -208,6 +208,35 @@ export interface IKChain {
   weight: number;
 }
 
+/** 片足のステップ状態 */
+export interface FootStep {
+  /** 現在の接地位置 (world space) */
+  planted: Vector3;
+  /** ステップ中の目標位置 */
+  target: Vector3;
+  /** ステップ中か */
+  stepping: boolean;
+  /** ステップ進行度 0→1 */
+  progress: number;
+  /** ステップ開始位置 */
+  liftPos: Vector3;
+}
+
+/** 両足のステッピングシステム */
+export interface FootStepper {
+  // Mixamo Left = 画面右足, Mixamo Right = 画面左足
+  left: FootStep;   // Mixamo LeftFoot (画面右足)
+  right: FootStep;  // Mixamo RightFoot (画面左足)
+  /** ステップ発動距離 (m) */
+  stepThreshold: number;
+  /** ステップ時の足の持ち上げ高さ (m) */
+  stepHeight: number;
+  /** ステップにかかる時間 (秒) */
+  stepDuration: number;
+  /** スタンス幅の半分 (m, 腰からの左右オフセット) */
+  stanceHalfWidth: number;
+}
+
 export interface DebugVisuals {
   comSphere: Mesh;
   supportLines: Mesh | null;
@@ -230,8 +259,9 @@ export interface HavokCharacter {
   physicsMesh: Mesh;
   /** IK */
   ikChains: { leftArm: IKChain; rightArm: IKChain; leftLeg: IKChain; rightLeg: IKChain };
-  /** Foot planting */
+  /** Foot stepping system */
   footPlant: { leftLocked: Vector3 | null; rightLocked: Vector3 | null };
+  footStepper: FootStepper;
   /** IK base rotations (instance-level) */
   ikBaseRotations: Map<string, { root: Quaternion; mid: Quaternion }>;
   /** Initial foot Y positions (for scaling) */
@@ -777,6 +807,115 @@ export function initFootPlanting(character: HavokCharacter, boneData: BoneDataFi
   chains.rightLeg.target.copyFrom(fp.rightLocked);
   chains.leftLeg.weight = 1;
   chains.rightLeg.weight = 1;
+
+  // FootStepper 初期化
+  character.footStepper.left.planted.copyFrom(fp.leftLocked);
+  character.footStepper.right.planted.copyFrom(fp.rightLocked);
+}
+
+// ─── Foot Stepping ───────────────────────────────────────
+
+/**
+ * 足のステッピング更新。腰の位置から各足の理想位置を計算し、
+ * 閾値を超えた足を持ち上げて弧を描きながら着地させる。
+ */
+export function updateFootStepping(character: HavokCharacter, dt: number): void {
+  const stepper = character.footStepper;
+  const chains = character.ikChains;
+  const dirs = getCharacterDirections(character);
+  if (!dirs) return;
+
+  const { forward, charRight } = dirs;
+  const hipsBone = character.allBones.get('mixamorig:Hips');
+  if (!hipsBone) return;
+  const hipsPos = getWorldPos(hipsBone);
+
+  // 地面Y (初期足位置のY = 接地面)
+  const groundY = character.initialFootY.left;
+
+  // 各足の理想位置: 腰の真下 ± スタンス幅
+  // Mixamo Left = 画面右足, Mixamo Right = 画面左足
+  const idealL = hipsPos.add(charRight.scale(stepper.stanceHalfWidth));
+  idealL.y = groundY;
+  const idealR = hipsPos.add(charRight.scale(-stepper.stanceHalfWidth));
+  idealR.y = groundY;
+
+  // 各足の水平距離 (Y無視)
+  const distL = Math.sqrt(
+    (stepper.left.planted.x - idealL.x) ** 2 + (stepper.left.planted.z - idealL.z) ** 2,
+  );
+  const distR = Math.sqrt(
+    (stepper.right.planted.x - idealR.x) ** 2 + (stepper.right.planted.z - idealR.z) ** 2,
+  );
+
+  // ステップ発動: 片足ずつ、より遠い方を優先
+  if (!stepper.left.stepping && !stepper.right.stepping) {
+    if (distL > stepper.stepThreshold && distL >= distR) {
+      // 画面右足 (Mixamo Left) をステップ
+      stepper.left.stepping = true;
+      stepper.left.progress = 0;
+      stepper.left.liftPos = stepper.left.planted.clone();
+      // 理想位置より少し先にオーバーシュート (自然な歩行)
+      const overshoot = idealL.subtract(stepper.left.planted).normalize().scale(0.03);
+      stepper.left.target = idealL.add(overshoot);
+      stepper.left.target.y = groundY;
+    } else if (distR > stepper.stepThreshold) {
+      // 画面左足 (Mixamo Right) をステップ
+      stepper.right.stepping = true;
+      stepper.right.progress = 0;
+      stepper.right.liftPos = stepper.right.planted.clone();
+      const overshoot = idealR.subtract(stepper.right.planted).normalize().scale(0.03);
+      stepper.right.target = idealR.add(overshoot);
+      stepper.right.target.y = groundY;
+    }
+  }
+
+  // ステップ更新
+  updateSingleStep(stepper.left, stepper, chains.leftLeg, groundY, dt);
+  updateSingleStep(stepper.right, stepper, chains.rightLeg, groundY, dt);
+
+  // ステップ中でない足は接地位置に固定
+  if (!stepper.left.stepping) {
+    chains.leftLeg.target.copyFrom(stepper.left.planted);
+  }
+  if (!stepper.right.stepping) {
+    chains.rightLeg.target.copyFrom(stepper.right.planted);
+  }
+
+  // footPlant (legacy) も更新
+  character.footPlant.leftLocked = stepper.left.planted.clone();
+  character.footPlant.rightLocked = stepper.right.planted.clone();
+}
+
+/** 片足のステップ進行 */
+function updateSingleStep(
+  foot: FootStep,
+  stepper: FootStepper,
+  chain: IKChain,
+  groundY: number,
+  dt: number,
+): void {
+  if (!foot.stepping) return;
+
+  foot.progress += dt / stepper.stepDuration;
+  if (foot.progress >= 1.0) {
+    // 着地完了
+    foot.progress = 1.0;
+    foot.stepping = false;
+    foot.planted.copyFrom(foot.target);
+    foot.planted.y = groundY;
+    chain.target.copyFrom(foot.planted);
+    return;
+  }
+
+  const t = foot.progress;
+  // XZ: 線形補間
+  const posX = foot.liftPos.x + (foot.target.x - foot.liftPos.x) * t;
+  const posZ = foot.liftPos.z + (foot.target.z - foot.liftPos.z) * t;
+  // Y: 放物線 (0→stepHeight→0)
+  const posY = groundY + stepper.stepHeight * 4 * t * (1 - t);
+
+  chain.target.set(posX, posY, posZ);
 }
 
 // ─── Debug Visuals ───────────────────────────────────────
@@ -899,8 +1038,25 @@ export async function createHavokCharacter(
   // IK chains
   const ikChains = createIKChains(allBones);
 
-  // Foot planting state
+  // Foot planting state (legacy, kept for init)
   const footPlant = { leftLocked: null as Vector3 | null, rightLocked: null as Vector3 | null };
+
+  // Foot stepping system
+  const mkStep = (): FootStep => ({
+    planted: Vector3.Zero(),
+    target: Vector3.Zero(),
+    stepping: false,
+    progress: 0,
+    liftPos: Vector3.Zero(),
+  });
+  const footStepper: FootStepper = {
+    left: mkStep(),
+    right: mkStep(),
+    stepThreshold: 0.15,  // 15cm ずれたらステップ発動
+    stepHeight: 0.08,     // 8cm 持ち上げ
+    stepDuration: 0.2,    // 0.2秒でステップ完了
+    stanceHalfWidth: 0.1, // 腰から左右10cmオフセット
+  };
 
   // Debug
   const debug = enableDebug ? createDebugVisuals(scene, prefix) : {
@@ -916,7 +1072,7 @@ export async function createHavokCharacter(
     root, allBones, combatBones, bodyMeshes,
     weaponAttachR, weaponAttachL,
     physicsBody, physicsMesh,
-    ikChains, footPlant, debug,
+    ikChains, footPlant, footStepper, debug,
     ikBaseRotations: new Map(),
     initialFootY: { left: 0, right: 0 },
     footBaseWorldRot: { left: Quaternion.Identity(), right: Quaternion.Identity() },
@@ -1561,7 +1717,12 @@ export function releaseOffHand(character: HavokCharacter, release: boolean): voi
 // ─── Per-Frame Update ────────────────────────────────────
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
-  // Solve leg IK (foot planting targets set once via initFootPlanting)
+  const deltaTime = dt ?? (1 / 60);
+
+  // Foot stepping: 腰の位置に応じて足を自動ステップ
+  updateFootStepping(character, deltaTime);
+
+  // Solve leg IK
   const chains = character.ikChains;
   solveIK2Bone(chains.leftLeg, character);
   solveIK2Bone(chains.rightLeg, character);
@@ -1923,20 +2084,12 @@ export function applyBodyMotion(
 
   // ─── 腰の移動 (Hips) ───
   const hipsBone = character.allBones.get('mixamorig:Hips');
+  const hipsMove = forward.scale(body.hipsForward);
   if (hipsBone) {
-    // hipsOffset (Y) と hipsForward を適用
-    // ベース位置は ensureBasePos で管理されているので、ここでは相対的にずらす
     hipsBone.position.y += body.hipsOffset;
-    hipsBone.position.addInPlace(forward.scale(body.hipsForward));
+    hipsBone.position.addInPlace(hipsMove);
   }
 
-  // ─── 足の踏み込み (画面右足 = Mixamo LeftFoot のIKターゲット) ───
-  if (character.footPlant.leftLocked && Math.abs(body.footStepR) > 0.001) {
-    // Mixamo Left = 画面右足
-    const chains = character.ikChains;
-    const baseTarget = character.footPlant.leftLocked.clone();
-    chains.leftLeg.target.copyFrom(
-      baseTarget.add(forward.scale(body.footStepR)),
-    );
-  }
+  // 足のステップは updateFootStepping (updateHavokCharacter内) が自動処理
+  // 腰が動けばステッピングシステムが自動的に足を追従させる
 }

@@ -12,7 +12,7 @@ import {
   equipWeapon, unequipWeapon, updateWeaponInertia,
   startSwing, endSwing, releaseOffHand,
   fetchGameAssetWeapons, equipGameAssetWeapon,
-  getCharacterDirections,
+  getCharacterDirections, getStanceTargets,
   createTarget, createSwingMotion, updateSwingMotion, applyBodyMotion,
   type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
   type SwingMotion, type SwingType,
@@ -372,13 +372,19 @@ export default function HavokTestPage() {
             }
           }
           if (!_currentMotion.active) {
-            // モーション終了 → 構えに戻る
+            // モーション終了 → 胴体回転をリセット (足はステッピングシステムが自動復帰)
+            const spine = char.allBones.get('mixamorig:Spine1');
+            if (spine) {
+              const baseRot = char.ikBaseRotations.get(spine.name);
+              if (baseRot) spine.rotationQuaternion = baseRot.root.clone();
+            }
             _currentMotion = null;
           }
         } else {
-          // 通常: 構えの基準位置 + スライダーオフセット
-          const basePos = char.weaponSwing.baseHandPos;
-          const desired = basePos.add(_swingTarget);
+          // 通常: 現在の体の位置から構えのグリップ位置を毎フレーム再計算
+          const stanceNow = getStanceTargets(char, char.weaponSwing.stance, char.weapon);
+          const desired = stanceNow.rightTarget.add(_swingTarget);
+          char.weaponSwing.baseHandPos.copyFrom(stanceNow.rightTarget);
           updateWeaponInertia(char, desired, dt);
         }
       }
