@@ -10,6 +10,7 @@ const pages = [
   { href: '/battle-royale', title: 'Battle Royale', desc: '108人バトルロイヤル（1発KO・最後の1人まで）' },
   { href: '/field', title: 'Field Viewer', desc: 'ボクセル地形ビューワー' },
   { href: '/havok-test', title: 'Havok Test', desc: 'Havok物理キャラクター / 武器装備・構え・スイングモーション確認' },
+  { href: '/weapon-combat-v2', title: 'Weapon Combat v2', desc: 'HavokCharacter対戦 / IK武器物理・AI追尾・攻撃モーション' },
 ];
 
 export default function Home() {

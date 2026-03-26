@@ -16,6 +16,7 @@ import {
   createTarget, createSwingMotion, updateSwingMotion, applyBodyMotion,
   createCombatAI, updateCombatAI,
   createTargetMover, updateTargetMover,
+  startJump,
   type CombatAI, type TargetMover,
   type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
   type SwingMotion, type SwingType,
@@ -402,7 +403,7 @@ export default function HavokTestPage() {
       if (char && char.weapon && (!_combatAI || !_combatAI.enabled)) {
         if (_currentMotion && _currentMotion.active) {
           // スイングモーション中: 慣性バイパス
-          const frame = updateSwingMotion(_currentMotion, dt);
+          const frame = updateSwingMotion(_currentMotion, dt, char.root.position);
           if (frame) {
             // 手のIKターゲット (画面右手 = Mixamo leftArm)
             char.ikChains.leftArm.target.copyFrom(frame.handTarget);
@@ -851,6 +852,21 @@ export default function HavokTestPage() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Jump */}
+        <div style={{ marginBottom: 8, borderTop: '1px solid #0f0', paddingTop: 8 }}>
+          <button
+            onClick={() => {
+              const c = characterRef.current;
+              if (c) startJump(c);
+            }}
+            style={{
+              width: '100%', padding: 8,
+              background: '#060', color: '#fff', border: 'none', borderRadius: 4,
+              cursor: 'pointer', fontWeight: 'bold',
+            }}
+          >Jump</button>
         </div>
 
         {/* Reset button */}

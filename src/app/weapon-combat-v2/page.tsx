@@ -1,0 +1,281 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import {
+  Engine, Scene, ArcRotateCamera, HemisphericLight, DirectionalLight,
+  Vector3, Color3, Color4, MeshBuilder, StandardMaterial, Quaternion,
+} from '@babylonjs/core';
+import {
+  initHavok, createHavokCharacter, updateHavokCharacter,
+  fetchGameAssetWeapons, equipGameAssetWeapon,
+  createCombatAIvsCharacter, updateCombatAIvsCharacter,
+  resolveCharacterCollision, teleportCharacter,
+  type HavokCharacter, type CombatAI, type GameAssetWeaponInfo,
+} from '@/lib/havok-character';
+
+interface FighterHUD {
+  hp: number;
+  maxHp: number;
+  state: string;
+  weaponName: string;
+}
+
+export default function WeaponCombatV2Page() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [f1, setF1] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '' });
+  const [f2, setF2] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '' });
+  const [matchResult, setMatchResult] = useState<string | null>(null);
+  const [events, setEvents] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let disposed = false;
+    const engine = new Engine(canvas, true);
+    const scene = new Scene(engine);
+    scene.clearColor = new Color4(0.1, 0.1, 0.15, 1);
+
+    const camera = new ArcRotateCamera('cam', Math.PI / 2, Math.PI / 3.5, 6, new Vector3(0, 0.8, 0), scene);
+    camera.attachControl(canvas, true);
+    camera.lowerRadiusLimit = 2;
+    camera.upperRadiusLimit = 15;
+    camera.wheelPrecision = 30;
+
+    new HemisphericLight('hemi', new Vector3(0, 1, 0), scene).intensity = 0.5;
+    new DirectionalLight('dir', new Vector3(-1, -2, 1), scene).intensity = 0.8;
+
+    const ground = MeshBuilder.CreateGround('arena', { width: 10, height: 10 }, scene);
+    const gMat = new StandardMaterial('arenaMat', scene);
+    gMat.diffuseColor = new Color3(0.35, 0.3, 0.25);
+    ground.material = gMat;
+
+    // State
+    let f1Hp = 100, f2Hp = 100;
+    let ai1: CombatAI | null = null;
+    let ai2: CombatAI | null = null;
+    let char1: HavokCharacter | null = null;
+    let char2: HavokCharacter | null = null;
+    let matchEnded = false;
+
+    const eventLog: string[] = [];
+    function addEvent(msg: string) {
+      eventLog.unshift(msg);
+      if (eventLog.length > 8) eventLog.pop();
+      setEvents([...eventLog]);
+    }
+
+    (async () => {
+      try {
+        await initHavok(scene);
+        if (disposed) return;
+
+        // 2体のキャラクター作成 (同一設定、原点で初期化)
+        char1 = await createHavokCharacter(scene, {
+          bodyColor: new Color3(0.2, 0.35, 0.8),
+          prefix: 'f1',
+          position: new Vector3(0, 0, 0),
+          enablePhysics: false,
+          enableDebug: false,
+        });
+
+        char2 = await createHavokCharacter(scene, {
+          bodyColor: new Color3(0.8, 0.2, 0.2),
+          prefix: 'f2',
+          position: new Vector3(0, 0, 0),
+          enablePhysics: false,
+          enableDebug: false,
+        });
+
+        // 初期化完了後にテレポートで配置・向きを設定
+        teleportCharacter(char1, new Vector3(0, 0, -2), 0);       // +Z方向を向く
+        teleportCharacter(char2, new Vector3(0, 0, 2), Math.PI);  // -Z方向を向く (f1に向かう)
+
+        // 武器を取得・装備
+        const weapons = await fetchGameAssetWeapons();
+        const axeInfo = weapons.find(w => w.pieceKey === 'Axe');
+        if (!axeInfo) {
+          addEvent('Axe not found in game-assets');
+          setLoading(false);
+          return;
+        }
+
+        await equipGameAssetWeapon(scene, char1, axeInfo, 'front');
+        await equipGameAssetWeapon(scene, char2, axeInfo, 'front');
+
+        if (!char1.weapon || !char2.weapon) {
+          addEvent('Weapon equip failed');
+          setLoading(false);
+          return;
+        }
+
+        // AI作成
+        ai1 = createCombatAIvsCharacter(char2, char1.weapon);
+        ai2 = createCombatAIvsCharacter(char1, char2.weapon);
+        ai1.enabled = true;
+        ai2.enabled = true;
+
+        setF1(prev => ({ ...prev, weaponName: `${axeInfo.category}/${axeInfo.pieceKey}` }));
+        setF2(prev => ({ ...prev, weaponName: `${axeInfo.category}/${axeInfo.pieceKey}` }));
+
+        setLoading(false);
+        addEvent('Fight!');
+      } catch (e) {
+        console.error('Init failed:', e);
+        addEvent(`Error: ${e}`);
+        setLoading(false);
+      }
+    })();
+
+    let prevTime = performance.now();
+    let hudTimer = 0;
+
+    engine.runRenderLoop(() => {
+      const now = performance.now();
+      const dt = Math.min((now - prevTime) / 1000, 0.1);
+      prevTime = now;
+
+      if (!char1 || !char2 || !ai1 || !ai2 || matchEnded) {
+        scene.render();
+        return;
+      }
+
+      // AI更新
+      const hit1 = updateCombatAIvsCharacter(ai1, char1, scene, dt);
+      const hit2 = updateCombatAIvsCharacter(ai2, char2, scene, dt);
+
+      // ヒット処理
+      if (hit1.hit) {
+        f2Hp = Math.max(0, f2Hp - hit1.damage);
+        addEvent(`Fighter1 hits Fighter2! (-${hit1.damage} HP)`);
+      }
+      if (hit2.hit) {
+        f1Hp = Math.max(0, f1Hp - hit2.damage);
+        addEvent(`Fighter2 hits Fighter1! (-${hit2.damage} HP)`);
+      }
+
+      // キャラクター間の衝突回避 (貫通防止)
+      resolveCharacterCollision(char1, char2);
+
+      // IK・ステッピング更新
+      updateHavokCharacter(scene, char1, dt);
+      updateHavokCharacter(scene, char2, dt);
+
+      // 勝敗判定
+      if (f1Hp <= 0 || f2Hp <= 0) {
+        matchEnded = true;
+        ai1.enabled = false;
+        ai2.enabled = false;
+        const winner = f1Hp > 0 ? 'Fighter 1 (Blue)' : 'Fighter 2 (Red)';
+        setMatchResult(`${winner} Wins!`);
+        addEvent(`${winner} wins!`);
+      }
+
+      // HUD更新 (200msごと)
+      hudTimer += dt;
+      if (hudTimer > 0.2) {
+        hudTimer = 0;
+        setF1({ hp: f1Hp, maxHp: 100, state: ai1.state, weaponName: `Axe` });
+        setF2({ hp: f2Hp, maxHp: 100, state: ai2.state, weaponName: `Axe` });
+      }
+
+      scene.render();
+    });
+
+    const handleResize = () => engine.resize();
+    window.addEventListener('resize', handleResize);
+    return () => { disposed = true; window.removeEventListener('resize', handleResize); engine.dispose(); };
+  }, []);
+
+  const hpBarStyle = (hp: number, max: number, color: string): React.CSSProperties => ({
+    width: `${(hp / max) * 100}%`,
+    height: 16,
+    background: color,
+    borderRadius: 3,
+    transition: 'width 0.3s',
+  });
+
+  const stateColor = (s: string) => {
+    if (s === 'attack') return '#f44';
+    if (s === 'pursue') return '#ff0';
+    if (s === 'recover') return '#f80';
+    return '#0f0';
+  };
+
+  return (
+    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#1a1a2e' }}>
+      {/* HUD */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+        padding: '8px 16px', background: 'rgba(0,0,0,0.85)', color: '#fff',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        {/* Fighter 1 */}
+        <div style={{ flex: 1, marginRight: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 'bold', color: '#4477ff', marginBottom: 4 }}>
+            Fighter 1 — {f1.weaponName}
+            <span style={{ marginLeft: 8, fontSize: 11, color: stateColor(f1.state) }}>
+              [{f1.state.toUpperCase()}]
+            </span>
+          </div>
+          <div style={{ background: '#333', borderRadius: 4, height: 16 }}>
+            <div style={hpBarStyle(f1.hp, f1.maxHp, '#4477ff')} />
+          </div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>HP: {f1.hp}/{f1.maxHp}</div>
+        </div>
+
+        {/* VS */}
+        <div style={{ fontSize: 18, fontWeight: 'bold', color: '#888', padding: '0 12px' }}>VS</div>
+
+        {/* Fighter 2 */}
+        <div style={{ flex: 1, marginLeft: 16, textAlign: 'right' }}>
+          <div style={{ fontSize: 13, fontWeight: 'bold', color: '#ff4444', marginBottom: 4 }}>
+            <span style={{ marginRight: 8, fontSize: 11, color: stateColor(f2.state) }}>
+              [{f2.state.toUpperCase()}]
+            </span>
+            Fighter 2 — {f2.weaponName}
+          </div>
+          <div style={{ background: '#333', borderRadius: 4, height: 16 }}>
+            <div style={{ ...hpBarStyle(f2.hp, f2.maxHp, '#ff4444'), marginLeft: 'auto' }} />
+          </div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>HP: {f2.hp}/{f2.maxHp}</div>
+        </div>
+      </div>
+
+      {/* Match Result */}
+      {matchResult && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          zIndex: 20, fontSize: 36, fontWeight: 'bold', color: '#fff',
+          textShadow: '0 0 20px rgba(255,100,100,0.8)', textAlign: 'center',
+        }}>
+          {matchResult}
+          <div style={{ fontSize: 14, color: '#aaa', marginTop: 12 }}>
+            Reload to restart
+          </div>
+        </div>
+      )}
+
+      {/* Event Log */}
+      <div style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10,
+        padding: '6px 16px', background: 'rgba(0,0,0,0.7)', color: '#ccc',
+        fontSize: 11, maxHeight: 120, overflow: 'hidden',
+      }}>
+        {events.map((e, i) => (
+          <div key={i} style={{ opacity: 1 - i * 0.12 }}>{e}</div>
+        ))}
+      </div>
+
+      {loading && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          zIndex: 30, color: '#fff', fontSize: 18,
+        }}>Loading...</div>
+      )}
+
+      <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+    </div>
+  );
+}
