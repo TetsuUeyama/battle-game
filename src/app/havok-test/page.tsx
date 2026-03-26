@@ -266,7 +266,7 @@ export default function HavokTestPage() {
         if (disposed) return;
 
         // Load bone data
-        const boneDataRes = await fetch('/bone-data.json');
+        const boneDataRes = await fetch('/api/game-assets/characters/mixamo-ybot/bone-data.json');
         const boneData: BoneDataFile = await boneDataRes.json();
 
         // Left: bone hierarchy visualization

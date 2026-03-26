@@ -10,6 +10,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.vox': 'application/octet-stream',
   '.json': 'application/json',
   '.fbx': 'application/octet-stream',
+  '.glb': 'model/gltf-binary',
 };
 
 export async function GET(

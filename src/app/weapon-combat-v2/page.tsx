@@ -12,6 +12,7 @@ import {
   resolveCharacterCollision, teleportCharacter, clampToFieldBounds,
   getWeaponTipWorld,
   createClashState, checkWeaponClash, updateClashReaction,
+  updateBalance,
   type ClashState,
   type HavokCharacter, type CombatAI, type GameAssetWeaponInfo,
 } from '@/lib/havok-character';
@@ -42,12 +43,14 @@ interface FighterHUD {
   maxHp: number;
   state: string;
   weaponName: string;
+  balance: number; // 0=安定, >0=不安定
+  staggered: boolean;
 }
 
 export default function WeaponCombatV2Page() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [f1, setF1] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '' });
-  const [f2, setF2] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '' });
+  const [f1, setF1] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '', balance: 0, staggered: false });
+  const [f2, setF2] = useState<FighterHUD>({ hp: 100, maxHp: 100, state: 'idle', weaponName: '', balance: 0, staggered: false });
   const [matchResult, setMatchResult] = useState<string | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -236,6 +239,10 @@ export default function WeaponCombatV2Page() {
       bloodFx.update(dt);
       sparkFx.update(dt);
 
+      // バランスシステム更新 (重心監視 + よろめき + オフハンド自動補正)
+      updateBalance(char1, ai1, dt);
+      updateBalance(char2, ai2, dt);
+
       // キャラクター間の衝突回避 + フィールド境界
       resolveCharacterCollision(char1, char2);
       clampToFieldBounds(char1, 4.5);
@@ -259,8 +266,8 @@ export default function WeaponCombatV2Page() {
       hudTimer += dt;
       if (hudTimer > 0.2) {
         hudTimer = 0;
-        setF1({ hp: f1Hp, maxHp: 100, state: ai1.state, weaponName: `Axe` });
-        setF2({ hp: f2Hp, maxHp: 100, state: ai2.state, weaponName: `Axe` });
+        setF1({ hp: f1Hp, maxHp: 100, state: ai1.state, weaponName: `Axe`, balance: char1.balance.deviation, staggered: char1.balance.staggered });
+        setF2({ hp: f2Hp, maxHp: 100, state: ai2.state, weaponName: `Axe`, balance: char2.balance.deviation, staggered: char2.balance.staggered });
       }
 
       scene.render();
@@ -305,7 +312,14 @@ export default function WeaponCombatV2Page() {
           <div style={{ background: '#333', borderRadius: 4, height: 16 }}>
             <div style={hpBarStyle(f1.hp, f1.maxHp, '#4477ff')} />
           </div>
-          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>HP: {f1.hp}/{f1.maxHp}</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+            HP: {f1.hp}/{f1.maxHp}
+            {f1.staggered && <span style={{ marginLeft: 8, color: '#f80', fontWeight: 'bold' }}>STAGGER!</span>}
+          </div>
+          {/* バランスバー */}
+          <div style={{ background: '#222', borderRadius: 2, height: 4, marginTop: 2 }}>
+            <div style={{ width: `${Math.min(100, f1.balance * 500)}%`, height: 4, background: f1.balance > 0.06 ? '#f80' : '#0a0', borderRadius: 2, transition: 'width 0.1s' }} />
+          </div>
         </div>
 
         {/* VS */}
@@ -322,7 +336,13 @@ export default function WeaponCombatV2Page() {
           <div style={{ background: '#333', borderRadius: 4, height: 16 }}>
             <div style={{ ...hpBarStyle(f2.hp, f2.maxHp, '#ff4444'), marginLeft: 'auto' }} />
           </div>
-          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>HP: {f2.hp}/{f2.maxHp}</div>
+          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>
+            HP: {f2.hp}/{f2.maxHp}
+            {f2.staggered && <span style={{ marginLeft: 8, color: '#f80', fontWeight: 'bold' }}>STAGGER!</span>}
+          </div>
+          <div style={{ background: '#222', borderRadius: 2, height: 4, marginTop: 2 }}>
+            <div style={{ width: `${Math.min(100, f2.balance * 500)}%`, height: 4, background: f2.balance > 0.06 ? '#f80' : '#0a0', borderRadius: 2, transition: 'width 0.1s', marginLeft: 'auto' }} />
+          </div>
         </div>
       </div>
 

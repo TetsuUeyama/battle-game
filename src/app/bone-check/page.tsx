@@ -40,7 +40,7 @@ export default function BoneCheckPage() {
     ground.material = gMat;
 
     (async () => {
-      const res = await fetch('/bone-data.json');
+      const res = await fetch('/api/game-assets/characters/mixamo-ybot/bone-data.json');
       const data = await res.json();
       const bones: BoneEntry[] = data.bones;
 

@@ -292,6 +292,137 @@ export function updateJump(character: HavokCharacter, dt: number): void {
   }
 }
 
+// ─── Balance System ──────────────────────────────────────
+
+export interface BalanceState {
+  /** 現在の重心逸脱度 (0=安定, >0=不安定) */
+  deviation: number;
+  /** よろめき中か */
+  staggered: boolean;
+  /** よろめき残り時間 */
+  staggerTimer: number;
+  /** よろめきの方向 (重心がずれた方向) */
+  staggerDir: Vector3;
+  /** よろめきの強度 */
+  staggerIntensity: number;
+}
+
+export function createBalanceState(): BalanceState {
+  return {
+    deviation: 0,
+    staggered: false,
+    staggerTimer: 0,
+    staggerDir: Vector3.Zero(),
+    staggerIntensity: 0,
+  };
+}
+
+/**
+ * バランスシステム更新。毎フレーム呼び出し。
+ * 重心が支持基底面(両足の間)から外れたらよろめきを発生。
+ * オフハンドを重心補正方向に自動移動。
+ */
+export function updateBalance(
+  character: HavokCharacter,
+  ai: CombatAI | null,
+  dt: number,
+): void {
+  const bal = character.balance;
+  const combatBones = character.combatBones;
+
+  // 重心計算
+  const com = calculateCenterOfMass(combatBones);
+  const lFoot = getWorldPos(combatBones.get('leftFoot')!);
+  const rFoot = getWorldPos(combatBones.get('rightFoot')!);
+
+  // 重心逸脱度
+  bal.deviation = getBalanceDeviation(com, lFoot, rFoot);
+
+  // ─── よろめき判定 ───
+  const staggerThreshold = 0.08; // 8cm以上ずれたらよろめき
+  if (!bal.staggered && bal.deviation > staggerThreshold) {
+    bal.staggered = true;
+    // よろめき時間: 逸脱度に比例 (0.3〜1.0秒)
+    bal.staggerTimer = Math.min(1.0, 0.3 + bal.deviation * 3);
+    bal.staggerIntensity = Math.min(1.0, bal.deviation * 5);
+
+    // 重心がずれた方向
+    const footCenter = lFoot.add(rFoot).scale(0.5);
+    bal.staggerDir = com.subtract(footCenter);
+    bal.staggerDir.y = 0;
+    if (bal.staggerDir.length() > 0.01) bal.staggerDir.normalize();
+
+    // AIの攻撃を強制中断
+    if (ai && (ai.state === 'attack' || ai.state === 'close_in')) {
+      if (ai.currentMotion) ai.currentMotion.active = false;
+      ai.state = 'recover';
+      ai.recoverTimer = bal.staggerTimer + 0.2;
+    }
+  }
+
+  // ─── よろめき中の処理 ───
+  if (bal.staggered) {
+    bal.staggerTimer -= dt;
+    const t = bal.staggerTimer;
+
+    // 体を横にぐらつかせる (Y方向には変化させない)
+    const spineBone = character.allBones.get('mixamorig:Spine1');
+    if (spineBone) {
+      const baseRot = character.ikBaseRotations.get(spineBone.name);
+      if (baseRot) {
+        const wobbleRot = Quaternion.RotationAxis(
+          Vector3.Forward(),
+          Math.sin(t * 12) * bal.staggerIntensity * 0.08,
+        );
+        spineBone.rotationQuaternion = wobbleRot.multiply(baseRot.root);
+      }
+    }
+
+    // よろめき方向に水平にのみ押される (Y変化なし)
+    const pushForce = bal.staggerIntensity * 0.3 * Math.max(0, t);
+    const pushVec = bal.staggerDir.scale(pushForce * dt);
+    pushVec.y = 0;
+    character.root.position.addInPlace(pushVec);
+
+    if (bal.staggerTimer <= 0) {
+      bal.staggered = false;
+      bal.staggerIntensity = 0;
+    }
+  }
+
+  // ─── オフハンド自動バランス補正 ───
+  // 重心がずれている方向の逆にオフハンドを移動 → 重心を実際に補正
+  if (character.weapon && character.weapon.gripType === 'one-handed'
+      && character.ikChains.rightArm.weight > 0 && bal.deviation > 0.02) {
+    const footCenter = lFoot.add(rFoot).scale(0.5);
+    const comOffset = com.subtract(footCenter);
+    comOffset.y = 0;
+
+    const restPos = getOffHandRestPosition(character);
+    if (restPos) {
+      const counterDir = comOffset.scale(-1);
+      if (counterDir.length() > 0.01) counterDir.normalize();
+      const counterAmount = Math.min(0.3, bal.deviation * 2);
+      const balancedPos = restPos.add(counterDir.scale(counterAmount)).add(new Vector3(0, counterAmount * 0.5, 0));
+
+      const current = character.ikChains.rightArm.target;
+      Vector3.LerpToRef(current, balancedPos, Math.min(1, 6 * dt), current);
+
+      // オフハンドの補正効果: 左手が動いた分だけ重心逸脱を軽減
+      // 腕の重量 (COM_WEIGHTSで leftArm=0.05, leftHand=0.01 = 6%) が対抗
+      const armWeight = 0.06;
+      const balanceEffect = counterAmount * armWeight * 5; // 最大 0.3*0.06*5 = 0.09
+      bal.deviation = Math.max(0, bal.deviation - balanceEffect);
+
+      // よろめき中: 左手の補正でよろめき時間を短縮
+      if (bal.staggered && counterAmount > 0.05) {
+        bal.staggerTimer -= counterAmount * dt * 2;
+        bal.staggerIntensity *= (1 - counterAmount * dt);
+      }
+    }
+  }
+}
+
 /** 片足のステップ状態 */
 export interface FootStep {
   /** 現在の接地位置 (world space) */
@@ -348,6 +479,8 @@ export interface HavokCharacter {
   footStepper: FootStepper;
   /** Jump state */
   jumpState: JumpState;
+  /** Balance system */
+  balance: BalanceState;
   /** IK base rotations (instance-level) */
   ikBaseRotations: Map<string, { root: Quaternion; mid: Quaternion }>;
   /** Initial foot Y positions (for scaling) */
@@ -484,8 +617,12 @@ function eulerDegreesToQuat(xDeg: number, yDeg: number, zDeg: number): Quaternio
   return qz.multiply(qy.multiply(qx));
 }
 
+/** bone-data.jsonのロードパス (game-assetsから参照) */
+const BONE_DATA_URL = '/api/game-assets/characters/mixamo-ybot/bone-data.json';
+
 async function loadBoneData(): Promise<BoneDataFile> {
-  const res = await fetch('/bone-data.json');
+  const res = await fetch(BONE_DATA_URL);
+  if (!res.ok) throw new Error(`Failed to load bone-data: ${res.status}`);
   return res.json();
 }
 
@@ -1241,7 +1378,7 @@ export async function createHavokCharacter(
     root, allBones, combatBones, bodyMeshes,
     weaponAttachR, weaponAttachL,
     physicsBody, physicsMesh,
-    ikChains, footPlant, footStepper, jumpState: createJumpState(), debug,
+    ikChains, footPlant, footStepper, jumpState: createJumpState(), balance: createBalanceState(), debug,
     ikBaseRotations: new Map(),
     initialFootY: { left: 0, right: 0 },
     hipsBaseY: 0,
@@ -1898,6 +2035,11 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
 
   // Jump update
   updateJump(character, deltaTime);
+
+  // 地面に固定 (ジャンプ中以外)
+  if (!character.jumpState.active) {
+    character.root.position.y = 0;
+  }
 
   // Foot stepping: 腰の位置に応じて足を自動ステップ (ジャンプ中はスキップ)
   if (!character.jumpState.active) {
@@ -2856,28 +2998,21 @@ export function updateClashReaction(
 
   clash.timer -= dt;
 
-  // 後方への押し戻し (急速に減衰)
+  // 後方への押し戻し (水平のみ、急速に減衰)
   const pushDecay = Math.max(0, clash.timer * 2);
-  character.root.position.addInPlace(
-    clash.pushDir.scale(clash.pushForce * pushDecay * dt),
-  );
+  const pushVec = clash.pushDir.scale(clash.pushForce * pushDecay * dt);
+  pushVec.y = 0;
+  character.root.position.addInPlace(pushVec);
 
-  // 腰の揺れ (サイン波でぐらつく)
-  const wobbleT = (1 - clash.timer / 0.4) * Math.PI * 4; // 高速振動
-  const wobble = Math.sin(wobbleT) * clash.wobbleIntensity * 0.03;
-  const hipsBone = character.allBones.get('mixamorig:Hips');
-  if (hipsBone) {
-    hipsBone.position.y += wobble;
-  }
-
-  // 胴体もぐらつかせる
+  // 胴体ぐらつき (Y方向変動なし、回転のみ)
+  const clashWobbleT = (1 - clash.timer / 0.4) * Math.PI * 4;
   const spineBone = character.allBones.get('mixamorig:Spine1');
   if (spineBone) {
     const baseRot = character.ikBaseRotations.get(spineBone.name);
     if (baseRot) {
       const wobbleRot = Quaternion.RotationAxis(
         Vector3.Forward(),
-        Math.sin(wobbleT * 1.3) * clash.wobbleIntensity * 0.1,
+        Math.sin(clashWobbleT * 1.3) * clash.wobbleIntensity * 0.1,
       );
       spineBone.rotationQuaternion = wobbleRot.multiply(baseRot.root);
     }
