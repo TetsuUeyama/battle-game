@@ -9,9 +9,31 @@ import {
   initHavok, createHavokCharacter, updateHavokCharacter,
   fetchGameAssetWeapons, equipGameAssetWeapon,
   createCombatAIvsCharacter, updateCombatAIvsCharacter,
-  resolveCharacterCollision, teleportCharacter,
+  resolveCharacterCollision, teleportCharacter, clampToFieldBounds,
+  getWeaponTipWorld,
   type HavokCharacter, type CombatAI, type GameAssetWeaponInfo,
 } from '@/lib/havok-character';
+import { ParticleFxSystem, PRESET_BLOOD, type FluidPreset } from '@/lib/particle-fx';
+
+// 火花プリセット
+const PRESET_SPARK: FluidPreset = {
+  name: 'Spark',
+  color: new Color3(1.0, 0.8, 0.2),
+  specular: new Color3(1.0, 1.0, 0.8),
+  residueColor: new Color3(0.3, 0.2, 0.05),
+  alpha: 1.0,
+  residueAlpha: 0,
+  particleSize: 0.012,
+  gravityMul: 0.5,
+  airResistance: 0.8,
+  dripSpeed: 0,
+  dripDelay: [10, 10],
+  splashOnGround: false,
+  splashOnMesh: false,
+  splashMul: 0,
+  speedMul: 1.5,
+  verticalDamping: 0,
+};
 
 interface FighterHUD {
   hp: number;
@@ -50,6 +72,14 @@ export default function WeaponCombatV2Page() {
     const gMat = new StandardMaterial('arenaMat', scene);
     gMat.diffuseColor = new Color3(0.35, 0.3, 0.25);
     ground.material = gMat;
+
+    // Particle FX
+    const bloodFx = new ParticleFxSystem(scene, PRESET_BLOOD, {
+      maxParticles: 200, maxResidues: 500, maxSticky: 200,
+    });
+    const sparkFx = new ParticleFxSystem(scene, PRESET_SPARK, {
+      maxParticles: 100, maxResidues: 0, maxSticky: 0,
+    });
 
     // State
     let f1Hp = 100, f2Hp = 100;
@@ -145,18 +175,61 @@ export default function WeaponCombatV2Page() {
       const hit1 = updateCombatAIvsCharacter(ai1, char1, scene, dt);
       const hit2 = updateCombatAIvsCharacter(ai2, char2, scene, dt);
 
-      // ヒット処理
-      if (hit1.hit) {
+      // ヒット処理 + パーティクル
+      if (hit1.hit && char2) {
         f2Hp = Math.max(0, f2Hp - hit1.damage);
         addEvent(`Fighter1 hits Fighter2! (-${hit1.damage} HP)`);
+        // 血しぶき: 武器先端位置から相手方向に噴出
+        const tip1 = getWeaponTipWorld(char1);
+        const hitDir1 = char2.root.position.subtract(char1.root.position).normalize();
+        bloodFx.emit({
+          origin: tip1,
+          pattern: { type: 'burst', normal: hitDir1, spread: 0.8 },
+          speed: 3.0,
+          count: 15 + hit1.damage,
+          sizeScale: 1.2,
+        });
       }
-      if (hit2.hit) {
+      if (hit2.hit && char1) {
         f1Hp = Math.max(0, f1Hp - hit2.damage);
         addEvent(`Fighter2 hits Fighter1! (-${hit2.damage} HP)`);
+        const tip2 = getWeaponTipWorld(char2);
+        const hitDir2 = char1.root.position.subtract(char2.root.position).normalize();
+        bloodFx.emit({
+          origin: tip2,
+          pattern: { type: 'burst', normal: hitDir2, spread: 0.8 },
+          speed: 3.0,
+          count: 15 + hit2.damage,
+          sizeScale: 1.2,
+        });
       }
 
-      // キャラクター間の衝突回避 (貫通防止)
+      // 武器同士の衝突検知 → 火花
+      if (char1.weapon && char2.weapon) {
+        const tip1 = getWeaponTipWorld(char1);
+        const tip2 = getWeaponTipWorld(char2);
+        const weaponDist = Vector3.Distance(tip1, tip2);
+        if (weaponDist < 0.25) {
+          const midPoint = Vector3.Lerp(tip1, tip2, 0.5);
+          const sparkDir = Vector3.Up();
+          sparkFx.emit({
+            origin: midPoint,
+            pattern: { type: 'burst', normal: sparkDir, spread: 1.5 },
+            speed: 4.0,
+            count: 20,
+            sizeScale: 0.8,
+          });
+        }
+      }
+
+      // パーティクル更新
+      bloodFx.update(dt);
+      sparkFx.update(dt);
+
+      // キャラクター間の衝突回避 + フィールド境界
       resolveCharacterCollision(char1, char2);
+      clampToFieldBounds(char1, 4.5);
+      clampToFieldBounds(char2, 4.5);
 
       // IK・ステッピング更新
       updateHavokCharacter(scene, char1, dt);
