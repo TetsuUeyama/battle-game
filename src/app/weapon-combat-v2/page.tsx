@@ -11,6 +11,8 @@ import {
   createCombatAIvsCharacter, updateCombatAIvsCharacter,
   resolveCharacterCollision, teleportCharacter, clampToFieldBounds,
   getWeaponTipWorld,
+  createClashState, checkWeaponClash, updateClashReaction,
+  type ClashState,
   type HavokCharacter, type CombatAI, type GameAssetWeaponInfo,
 } from '@/lib/havok-character';
 import { ParticleFxSystem, PRESET_BLOOD, type FluidPreset } from '@/lib/particle-fx';
@@ -85,6 +87,8 @@ export default function WeaponCombatV2Page() {
     let f1Hp = 100, f2Hp = 100;
     let ai1: CombatAI | null = null;
     let ai2: CombatAI | null = null;
+    const clash1 = createClashState();
+    const clash2 = createClashState();
     let char1: HavokCharacter | null = null;
     let char2: HavokCharacter | null = null;
     let matchEnded = false;
@@ -204,22 +208,28 @@ export default function WeaponCombatV2Page() {
         });
       }
 
-      // 武器同士の衝突検知 → 火花
+      // 武器同士の衝突検知 → 火花 + 反動
       if (char1.weapon && char2.weapon) {
-        const tip1 = getWeaponTipWorld(char1);
-        const tip2 = getWeaponTipWorld(char2);
-        const weaponDist = Vector3.Distance(tip1, tip2);
-        if (weaponDist < 0.25) {
+        const clashed = checkWeaponClash(char1, char2, clash1, clash2);
+        if (clashed) {
+          const tip1 = getWeaponTipWorld(char1);
+          const tip2 = getWeaponTipWorld(char2);
           const midPoint = Vector3.Lerp(tip1, tip2, 0.5);
-          const sparkDir = Vector3.Up();
           sparkFx.emit({
             origin: midPoint,
-            pattern: { type: 'burst', normal: sparkDir, spread: 1.5 },
-            speed: 4.0,
-            count: 20,
-            sizeScale: 0.8,
+            pattern: { type: 'burst', normal: Vector3.Up(), spread: 1.5 },
+            speed: 5.0,
+            count: 30,
+            sizeScale: 1.0,
           });
+          addEvent('Weapons clash!');
         }
+      }
+
+      // 武器衝突反動の更新
+      if (ai1 && ai2) {
+        updateClashReaction(char1, clash1, ai1, dt);
+        updateClashReaction(char2, clash2, ai2, dt);
       }
 
       // パーティクル更新

@@ -2769,6 +2769,138 @@ export function resolveCharacterCollision(
   posB.z += nz * push;
 }
 
+// ─── Weapon Clash Reaction ───────────────────────────────
+
+export interface ClashState {
+  /** よろめき中か */
+  staggered: boolean;
+  /** 残り時間 (秒) */
+  timer: number;
+  /** 押し戻し方向 (world, 正規化) */
+  pushDir: Vector3;
+  /** 押し戻し強度 */
+  pushForce: number;
+  /** 揺れの強度 (時間で減衰) */
+  wobbleIntensity: number;
+}
+
+export function createClashState(): ClashState {
+  return { staggered: false, timer: 0, pushDir: Vector3.Zero(), pushForce: 0, wobbleIntensity: 0 };
+}
+
+/**
+ * 武器同士の衝突を検知し、反作用を適用。
+ * 戻り値: 衝突が発生したか
+ */
+export function checkWeaponClash(
+  charA: HavokCharacter,
+  charB: HavokCharacter,
+  clashA: ClashState,
+  clashB: ClashState,
+): boolean {
+  if (!charA.weapon || !charB.weapon) return false;
+
+  const tipA = getWeaponTipWorld(charA);
+  const tipB = getWeaponTipWorld(charB);
+  const dist = Vector3.Distance(tipA, tipB);
+
+  if (dist >= 0.25) return false;
+
+  // 衝突発生: 互いの重量比で反動の大きさを決定
+  const wA = charA.weapon.weight;
+  const wB = charB.weapon.weight;
+  const totalW = wA + wB;
+
+  // 軽い方がより大きく弾かれる
+  const forceOnA = wB / totalW; // Bが重いほどAへの反動が大きい
+  const forceOnB = wA / totalW;
+
+  // 押し戻し方向: 相手→自分
+  const dirAtoB = charB.root.position.subtract(charA.root.position);
+  dirAtoB.y = 0;
+  if (dirAtoB.length() > 0.01) dirAtoB.normalize();
+
+  const basePush = 1.5;
+  const baseStagger = 0.4; // よろめき時間 (秒)
+
+  if (!clashA.staggered) {
+    clashA.staggered = true;
+    clashA.timer = baseStagger * forceOnA;
+    clashA.pushDir = dirAtoB.scale(-1); // Aは後方へ
+    clashA.pushForce = basePush * forceOnA;
+    clashA.wobbleIntensity = forceOnA;
+  }
+
+  if (!clashB.staggered) {
+    clashB.staggered = true;
+    clashB.timer = baseStagger * forceOnB;
+    clashB.pushDir = dirAtoB.clone(); // Bは後方へ
+    clashB.pushForce = basePush * forceOnB;
+    clashB.wobbleIntensity = forceOnB;
+  }
+
+  return true;
+}
+
+/**
+ * よろめき状態の更新。毎フレーム呼び出し。
+ * 腰の位置を揺らし、キャラを後方に押す。
+ */
+export function updateClashReaction(
+  character: HavokCharacter,
+  clash: ClashState,
+  ai: CombatAI,
+  dt: number,
+): void {
+  if (!clash.staggered) return;
+
+  clash.timer -= dt;
+
+  // 後方への押し戻し (急速に減衰)
+  const pushDecay = Math.max(0, clash.timer * 2);
+  character.root.position.addInPlace(
+    clash.pushDir.scale(clash.pushForce * pushDecay * dt),
+  );
+
+  // 腰の揺れ (サイン波でぐらつく)
+  const wobbleT = (1 - clash.timer / 0.4) * Math.PI * 4; // 高速振動
+  const wobble = Math.sin(wobbleT) * clash.wobbleIntensity * 0.03;
+  const hipsBone = character.allBones.get('mixamorig:Hips');
+  if (hipsBone) {
+    hipsBone.position.y += wobble;
+  }
+
+  // 胴体もぐらつかせる
+  const spineBone = character.allBones.get('mixamorig:Spine1');
+  if (spineBone) {
+    const baseRot = character.ikBaseRotations.get(spineBone.name);
+    if (baseRot) {
+      const wobbleRot = Quaternion.RotationAxis(
+        Vector3.Forward(),
+        Math.sin(wobbleT * 1.3) * clash.wobbleIntensity * 0.1,
+      );
+      spineBone.rotationQuaternion = wobbleRot.multiply(baseRot.root);
+    }
+  }
+
+  // よろめき中はAIを回復状態に強制
+  if (ai.state === 'attack' || ai.state === 'close_in') {
+    if (ai.currentMotion) ai.currentMotion.active = false;
+    ai.state = 'recover';
+    ai.recoverTimer = clash.timer + 0.3;
+  }
+
+  if (clash.timer <= 0) {
+    clash.staggered = false;
+    clash.wobbleIntensity = 0;
+    // 胴体をリセット
+    if (spineBone) {
+      const baseRot = character.ikBaseRotations.get(spineBone.name);
+      if (baseRot) spineBone.rotationQuaternion = baseRot.root.clone();
+    }
+  }
+}
+
 // ─── Field Bounds ────────────────────────────────────────
 
 /**
