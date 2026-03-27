@@ -54,6 +54,11 @@ export default function WeaponCombatV2Page() {
   const [matchResult, setMatchResult] = useState<string | null>(null);
   const [events, setEvents] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [weaponList, setWeaponList] = useState<GameAssetWeaponInfo[]>([]);
+  const [weapon1Key, setWeapon1Key] = useState('');
+  const [weapon2Key, setWeapon2Key] = useState('');
+  const [fightStarted, setFightStarted] = useState(false);
+  const startFightRef = useRef<((w1: string, w2: string) => void) | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -129,35 +134,54 @@ export default function WeaponCombatV2Page() {
         teleportCharacter(char1, new Vector3(0, 0, -2), 0);       // +Z方向を向く
         teleportCharacter(char2, new Vector3(0, 0, 2), Math.PI);  // -Z方向を向く (f1に向かう)
 
-        // 武器を取得・装備
+        // 武器一覧を取得してUIに反映
         const weapons = await fetchGameAssetWeapons();
-        const axeInfo = weapons.find(w => w.pieceKey === 'Axe');
-        if (!axeInfo) {
-          addEvent('Axe not found in game-assets');
-          setLoading(false);
-          return;
+        setWeaponList(weapons);
+        if (weapons.length > 0) {
+          setWeapon1Key(weapons[0].pieceKey);
+          setWeapon2Key(weapons[0].pieceKey);
         }
 
-        await equipGameAssetWeapon(scene, char1, axeInfo, 'front');
-        await equipGameAssetWeapon(scene, char2, axeInfo, 'front');
+        // 戦闘開始関数を登録 (UIから呼び出せるようにする)
+        startFightRef.current = async (w1Key: string, w2Key: string) => {
+          if (!char1 || !char2 || matchEnded) return;
 
-        if (!char1.weapon || !char2.weapon) {
-          addEvent('Weapon equip failed');
-          setLoading(false);
-          return;
-        }
+          const w1Info = weapons.find(w => w.pieceKey === w1Key);
+          const w2Info = weapons.find(w => w.pieceKey === w2Key);
+          if (!w1Info || !w2Info) {
+            addEvent('Selected weapon not found');
+            return;
+          }
 
-        // AI作成
-        ai1 = createCombatAIvsCharacter(char2, char1.weapon);
-        ai2 = createCombatAIvsCharacter(char1, char2.weapon);
-        ai1.enabled = true;
-        ai2.enabled = true;
+          try {
+            await equipGameAssetWeapon(scene, char1, w1Info, 'front');
+            await equipGameAssetWeapon(scene, char2, w2Info, 'front');
 
-        setF1(prev => ({ ...prev, weaponName: `${axeInfo.category}/${axeInfo.pieceKey}` }));
-        setF2(prev => ({ ...prev, weaponName: `${axeInfo.category}/${axeInfo.pieceKey}` }));
+            if (!char1.weapon || !char2.weapon) {
+              addEvent('Weapon equip failed');
+              return;
+            }
+
+            ai1 = createCombatAIvsCharacter(char2, char1.weapon);
+            ai2 = createCombatAIvsCharacter(char1, char2.weapon);
+            ai1.enabled = true;
+            ai2.enabled = true;
+
+            f1Hp = 100; f2Hp = 100;
+            matchEnded = false;
+            setMatchResult(null);
+
+            setF1(prev => ({ ...prev, hp: 100, weaponName: `${w1Info.category}/${w1Info.pieceKey}` }));
+            setF2(prev => ({ ...prev, hp: 100, weaponName: `${w2Info.category}/${w2Info.pieceKey}` }));
+            setFightStarted(true);
+            addEvent(`Fight! ${w1Info.pieceKey} vs ${w2Info.pieceKey}`);
+          } catch (e) {
+            console.error('Weapon equip failed:', e);
+            addEvent(`Error equipping weapon: ${e}`);
+          }
+        };
 
         setLoading(false);
-        addEvent('Fight!');
       } catch (e) {
         console.error('Init failed:', e);
         addEvent(`Error: ${e}`);
@@ -266,8 +290,8 @@ export default function WeaponCombatV2Page() {
       hudTimer += dt;
       if (hudTimer > 0.2) {
         hudTimer = 0;
-        setF1({ hp: f1Hp, maxHp: 100, state: ai1.state, weaponName: `Axe`, balance: char1.balance.deviation, staggered: char1.balance.staggered });
-        setF2({ hp: f2Hp, maxHp: 100, state: ai2.state, weaponName: `Axe`, balance: char2.balance.deviation, staggered: char2.balance.staggered });
+        setF1(prev => ({ hp: f1Hp, maxHp: 100, state: ai1!.state, weaponName: prev.weaponName, balance: char1!.balance.deviation, staggered: char1!.balance.staggered }));
+        setF2(prev => ({ hp: f2Hp, maxHp: 100, state: ai2!.state, weaponName: prev.weaponName, balance: char2!.balance.deviation, staggered: char2!.balance.staggered }));
       }
 
       scene.render();
@@ -370,6 +394,57 @@ export default function WeaponCombatV2Page() {
           <div key={i} style={{ opacity: 1 - i * 0.12 }}>{e}</div>
         ))}
       </div>
+
+      {/* Weapon Selection UI */}
+      {!loading && !fightStarted && weaponList.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          zIndex: 25, background: 'rgba(0,0,0,0.92)', borderRadius: 12, padding: '24px 32px',
+          color: '#fff', minWidth: 360, textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 16 }}>Select Weapons</div>
+          <div style={{ display: 'flex', gap: 24, justifyContent: 'center', marginBottom: 20 }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#4477ff', fontWeight: 'bold', marginBottom: 6 }}>Fighter 1 (Blue)</div>
+              <select
+                value={weapon1Key}
+                onChange={e => setWeapon1Key(e.target.value)}
+                style={{ padding: '6px 12px', fontSize: 14, borderRadius: 4, background: '#222', color: '#fff', border: '1px solid #555', minWidth: 140 }}
+              >
+                {weaponList.map(w => (
+                  <option key={w.pieceKey} value={w.pieceKey}>
+                    {w.pieceKey.replace(/_/g, ' ')} ({w.category})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#ff4444', fontWeight: 'bold', marginBottom: 6 }}>Fighter 2 (Red)</div>
+              <select
+                value={weapon2Key}
+                onChange={e => setWeapon2Key(e.target.value)}
+                style={{ padding: '6px 12px', fontSize: 14, borderRadius: 4, background: '#222', color: '#fff', border: '1px solid #555', minWidth: 140 }}
+              >
+                {weaponList.map(w => (
+                  <option key={w.pieceKey} value={w.pieceKey}>
+                    {w.pieceKey.replace(/_/g, ' ')} ({w.category})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <button
+            onClick={() => startFightRef.current?.(weapon1Key, weapon2Key)}
+            style={{
+              padding: '10px 32px', fontSize: 16, fontWeight: 'bold',
+              background: '#e44', color: '#fff', border: 'none', borderRadius: 6,
+              cursor: 'pointer',
+            }}
+          >
+            FIGHT!
+          </button>
+        </div>
+      )}
 
       {loading && (
         <div style={{

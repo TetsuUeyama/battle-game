@@ -338,8 +338,10 @@ export class ParticleFxSystem {
   // ── Residue (ground) ─────────────────────────────────
 
   private placeResidue(pos: Vector3, size: number) {
+    if (this.maxResidues <= 0) return;
     if (this.residues.length >= this.maxResidues) {
-      this.residues.shift()!.dispose();
+      const old = this.residues.shift();
+      if (old) old.dispose();
     }
     const tpl = this.getResidueTpl();
     const inst = tpl.createInstance(`r${this.idCounter++}`);
@@ -364,8 +366,10 @@ export class ParticleFxSystem {
   // ── Sticky (surface) ─────────────────────────────────
 
   private placeSticky(pos: Vector3, hitMesh: Mesh, size: number) {
+    if (this.maxSticky <= 0) return;
     if (this.stickyDrops.length >= this.maxSticky) {
-      this.stickyDrops.shift()!.mesh.dispose();
+      const old = this.stickyDrops.shift();
+      if (old) old.mesh.dispose();
     }
     const tpl = this.getResidueTpl();
     const inst = tpl.createInstance(`st${this.idCounter++}`);
