@@ -1,20 +1,11 @@
 /**
- * Combat AI — ステート間で共有される処理。
- *
- * - turnToward:    相手方向への自動回転 (足・footBaseWorldRotも追従)
- * - updateStance:  構え位置の毎フレーム更新 (attack以外で使用)
- * - resetSpine:    胴体回転をT-poseにリセット
+ * 指定方向への回転アクション。足の接地位置・footBaseWorldRotも追従させる。
  */
 import { Vector3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter } from '../types';
 import { rotateVectorByQuat } from '@/lib/math-utils';
-import { getStanceTargets } from '../weapon/stance';
-import { updateWeaponInertia } from '../weapon';
 import { TURN_CONFIG } from '../character/body';
 
-/**
- * キャラクターを指定方向に回転させ、足の接地位置・footBaseWorldRotも追従させる。
- */
 export function turnToward(
   character: HavokCharacter,
   dir: Vector3,
@@ -42,7 +33,6 @@ export function turnToward(
     );
   }
 
-  // 足の接地位置を root 中心で回転
   const rootPos = character.root.position;
   const stepper = character.footStepper;
   for (const foot of [stepper.left, stepper.right]) {
@@ -58,25 +48,4 @@ export function turnToward(
   if (character.footPlant.rightLocked) character.footPlant.rightLocked.copyFrom(stepper.right.planted);
   character.footBaseWorldRot.left = rotDelta.multiply(character.footBaseWorldRot.left);
   character.footBaseWorldRot.right = rotDelta.multiply(character.footBaseWorldRot.right);
-}
-
-/**
- * 構え位置を更新し、武器慣性を適用する。attack 以外の全ステートで毎フレーム呼び出す。
- */
-export function updateStance(character: HavokCharacter, dt: number): void {
-  if (!character.weapon) return;
-  const stanceNow = getStanceTargets(character, character.weaponSwing.stance, character.weapon);
-  character.weaponSwing.baseHandPos.copyFrom(stanceNow.rightTarget);
-  updateWeaponInertia(character, stanceNow.rightTarget, dt);
-}
-
-/**
- * 胴体回転を T-pose にリセットする。攻撃終了後に呼び出す。
- */
-export function resetSpine(character: HavokCharacter): void {
-  const spine = character.allBones.get('mixamorig:Spine1');
-  if (spine) {
-    const baseRot = character.ikBaseRotations.get(spine.name);
-    if (baseRot) spine.rotationQuaternion = baseRot.root.clone();
-  }
 }

@@ -1,16 +1,15 @@
 /** retreat: 攻撃後に安全距離まで後退。完了したら recover へ。 */
-import type { StateContext, StateResult } from '../ai/context';
-import { updateStance } from '../ai/shared';
-import { shouldEndRetreat } from '../ai/distance-eval';
+import type { StateContext, StateResult } from '../types';
+import { updateStance } from '../weapon/stance';
 import { retreatBack } from '../actions/retreat-back';
 
 export function handleRetreat(ctx: StateContext): StateResult {
-  const { ai, character, dist, dir, dt } = ctx;
+  const { ai, character, dir, dt, decision } = ctx;
   updateStance(character, dt);
 
   ai.recoverTimer -= dt;
-  if (shouldEndRetreat(ai, dist)) {
-    ai.state = 'recover';
+  if (decision.nextState) {
+    ai.state = decision.nextState;
     ai.recoverTimer = 0.3 + Math.random() * 0.3;
   } else {
     retreatBack(character, dir, ai, dt);

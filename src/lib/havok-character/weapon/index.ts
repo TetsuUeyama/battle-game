@@ -23,12 +23,15 @@ export {
 export {
   getWeaponScaleFactors, createSwingMotion, updateSwingMotion, applyBodyMotion,
 } from './attack-swing';
-export type { WeaponScaleFactors } from './attack-swing';
+export type { WeaponScaleFactors, SwingMotionOptions } from './attack-swing';
 
 // 防御的スイング (相手武器を回避するBezier軌道攻撃)
 export {
   evaluateBezier, computeAttackPath, createDefenceSwingMotion,
 } from './defence-swing';
 
-// 練習用標的
-export { createTarget } from './target';
+// 構え位置
+export { getOffHandRestPosition, getStanceTargets, updateStance } from './stance';
+
+// 練習用標的 (作成 + ランダム移動)
+export { createTarget, createTargetMover, updateTargetMover } from './target';

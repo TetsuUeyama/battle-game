@@ -1,9 +1,11 @@
 /**
- * SwingMotion 進行 + ヒット判定。
- * 毎フレーム呼び出し、手のIKターゲット更新とダメージ判定を行う。
- *
- * @returns { hit, damage } — 攻撃がヒットした場合にダメージを返す
+ * 攻撃スイングアクション。
+ * - createSwingMotion: SwingMotion の生成 (weapon/attack-swing から再エクスポート)
+ * - swingAttack: SwingMotion の毎フレーム進行 + ヒット判定
  */
+export { createSwingMotion } from '../weapon/attack-swing';
+export type { SwingMotionOptions } from '../weapon/attack-swing';
+
 import { Vector3 } from '@babylonjs/core';
 import type { HavokCharacter, CombatAI } from '../types';
 import { getWorldPos } from '@/lib/math-utils';
@@ -29,7 +31,6 @@ export function swingAttack(
   let finished = false;
 
   if (ai.currentMotion && ai.currentMotion.active) {
-    // SwingMotion 進行: 手のIKターゲットとボディモーションを更新
     const frame = updateSwingMotion(ai.currentMotion, dt, character.root.position);
     if (frame) {
       character.ikChains.leftArm.target.copyFrom(frame.handTarget);
@@ -39,7 +40,6 @@ export function swingAttack(
       }
     }
 
-    // ヒット判定: 打撃フェーズ中のみ (progress > windupRatio)
     if (ai.currentMotion.progress > ai.currentMotion.windupRatio) {
       const tipWorld = getWeaponTipWorld(character);
       const hitTargets = ['torso', 'head', 'hips'];

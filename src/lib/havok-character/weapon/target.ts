@@ -1,9 +1,12 @@
 /**
- * 練習用標的の作成。簡易ポスト型 (棒 + 頭部球)。
+ * 練習用標的。メッシュ作成 + ランダム移動。
  */
 import {
   Scene, Vector3, Color3, MeshBuilder, StandardMaterial, TransformNode, Mesh,
 } from '@babylonjs/core';
+import type { TargetMover } from '../types';
+
+// ─── 標的メッシュ作成 ───────────────────────────────────
 
 export function createTarget(
   scene: Scene, position: Vector3, prefix: string,
@@ -36,4 +39,40 @@ export function createTarget(
   base.position.y = 0.025;
 
   return { root, meshes: [body, head, base] };
+}
+
+// ─── 標的ランダム移動 ───────────────────────────────────
+
+export function createTargetMover(node: TransformNode, center: Vector3, range: number): TargetMover {
+  return {
+    node,
+    waypoint: node.position.clone(),
+    speed: 0.8,
+    changeTimer: 0,
+    changeInterval: 2.0,
+    boundsMin: center.add(new Vector3(-range, 0, -range)),
+    boundsMax: center.add(new Vector3(range, 0, range)),
+  };
+}
+
+export function updateTargetMover(mover: TargetMover, dt: number): void {
+  mover.changeTimer += dt;
+  if (mover.changeTimer >= mover.changeInterval) {
+    mover.changeTimer = 0;
+    mover.waypoint = new Vector3(
+      mover.boundsMin.x + Math.random() * (mover.boundsMax.x - mover.boundsMin.x),
+      0,
+      mover.boundsMin.z + Math.random() * (mover.boundsMax.z - mover.boundsMin.z),
+    );
+  }
+
+  const pos = mover.node.position;
+  const toWp = mover.waypoint.subtract(pos);
+  toWp.y = 0;
+  const dist = toWp.length();
+  if (dist > 0.05) {
+    const dir = toWp.normalize();
+    const step = Math.min(dist, mover.speed * dt);
+    pos.addInPlace(dir.scale(step));
+  }
 }

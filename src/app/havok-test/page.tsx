@@ -18,7 +18,8 @@ import {
 } from '@/lib/havok-character/weapon';
 import { getCharacterDirections } from '@/lib/havok-character/character';
 import { getStanceTargets } from '@/lib/havok-character/weapon/stance';
-import { createCombatAI, updateCombatAI, createTargetMover, updateTargetMover } from '@/lib/havok-character/ai';
+import { createCombatAI, updateCombatAI } from '@/lib/havok-character/ai';
+import { createTargetMover, updateTargetMover } from '@/lib/havok-character/weapon';
 import type {
   CombatAI, TargetMover, HavokCharacter, WeaponPhysics, StanceType, GameAssetWeaponInfo,
   SwingMotion, SwingType,
@@ -353,7 +354,7 @@ export default function HavokTestPage() {
       if (!dirs) return;
       const charPos = c.root.position;
       const targetHitPos = charPos.add(dirs.forward.scale(1.5)).add(new Vector3(0, 1.1, 0));
-      _currentMotion = createSwingMotion(c, targetHitPos, swingType, power);
+      _currentMotion = createSwingMotion(c, { targetPos: targetHitPos, type: swingType, power });
       startSwing(c);
     };
 

@@ -82,3 +82,17 @@ export function getStanceTargets(
 
   return { rightTarget, leftTarget, weaponDir };
 }
+
+// ─── 構え毎フレーム更新 ─────────────────────────────────
+
+import { updateWeaponInertia } from './physics';
+
+/**
+ * 構え位置を更新し、武器慣性を適用する。attack 以外の全ステートで毎フレーム呼び出す。
+ */
+export function updateStance(character: HavokCharacter, dt: number): void {
+  if (!character.weapon) return;
+  const stanceNow = getStanceTargets(character, character.weaponSwing.stance, character.weapon);
+  character.weaponSwing.baseHandPos.copyFrom(stanceNow.rightTarget);
+  updateWeaponInertia(character, stanceNow.rightTarget, dt);
+}

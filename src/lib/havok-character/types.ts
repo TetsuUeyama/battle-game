@@ -538,3 +538,37 @@ export const JOINT_LIMITS: Record<string, { root: JointLimits; mid: JointLimits 
 
 /** bone-data.jsonのロードパス (game-assetsから参照) */
 export const BONE_DATA_URL = '/api/game-assets/characters/mixamo-ybot/bone-data.json';
+
+// ─── AI State Types ──────────────────────────────────────
+
+import type { Scene } from '@babylonjs/core';
+import type { Situation } from './ai/evaluate';
+import type { Decision } from './ai/decide';
+
+/** ステートハンドラに渡される共通コンテキスト */
+export interface StateContext {
+  ai: CombatAI;
+  character: HavokCharacter;
+  opponent: HavokCharacter;
+  scene: Scene;
+  dt: number;
+  /** 相手への水平方向 (Y=0) */
+  dir: Vector3;
+  /** 相手までの水平距離 */
+  dist: number;
+  /** キャラクター方向情報 (null の場合あり) */
+  dirs: { forward: Vector3; charRight: Vector3; charLeft: Vector3 } | null;
+  /** 戦況評価の結果 */
+  situation: Situation;
+  /** 行動決定の結果 */
+  decision: Decision;
+}
+
+/** ステートハンドラの戻り値 */
+export interface StateResult {
+  hit: boolean;
+  damage: number;
+}
+
+/** 各ステートハンドラの関数シグネチャ */
+export type StateHandler = (ctx: StateContext) => StateResult;

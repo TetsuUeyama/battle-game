@@ -36,3 +36,5 @@ export { WEAPON_SCALE_CONFIG } from './weapon-scale';
 export { PHYSICS_CONFIG } from './physics';
 
 export { TURN_CONFIG } from './turn';
+
+export { AI_PARAMS } from './ai-params';
