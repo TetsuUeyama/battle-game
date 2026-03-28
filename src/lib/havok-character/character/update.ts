@@ -13,6 +13,7 @@ import {
 } from './index';
 import { updateWeaponPower } from '../weapon';
 import { updateJump } from '../actions/jump';
+import { resolveBodySelfCollision } from './body-collision';
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
   const deltaTime = dt ?? (1 / 60);
@@ -37,15 +38,24 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     chains.rightArm.poleHint.copyFrom(backward);
   }
 
-  solveIK2Bone(chains.leftLeg, character);
-  solveIK2Bone(chains.rightLeg, character);
-  solveIK2Bone(chains.leftArm, character);
-  solveIK2Bone(chains.rightArm, character);
+  // IKソルブ → 関節クランプ → 自己貫通チェック → 再IK (最大2回)
+  for (let pass = 0; pass < 2; pass++) {
+    solveIK2Bone(chains.leftLeg, character);
+    solveIK2Bone(chains.rightLeg, character);
+    solveIK2Bone(chains.leftArm, character);
+    solveIK2Bone(chains.rightArm, character);
 
-  clampJointAngles(chains.leftLeg, character, 'leg');
-  clampJointAngles(chains.rightLeg, character, 'leg');
-  clampJointAngles(chains.leftArm, character, 'arm');
-  clampJointAngles(chains.rightArm, character, 'arm');
+    clampJointAngles(chains.leftLeg, character, 'leg');
+    clampJointAngles(chains.rightLeg, character, 'leg');
+    clampJointAngles(chains.leftArm, character, 'arm');
+    clampJointAngles(chains.rightArm, character, 'arm');
+
+    // 自己貫通チェック: IKターゲットを押し戻す
+    // 2パス目は押し戻し後のIK再解決
+    if (pass === 0) {
+      resolveBodySelfCollision(character);
+    }
+  }
 
   keepFootHorizontal(chains.leftLeg.end, character.footBaseWorldRot.left);
   keepFootHorizontal(chains.rightLeg.end, character.footBaseWorldRot.right);

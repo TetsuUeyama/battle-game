@@ -42,3 +42,6 @@ export { teleportCharacter, resolveCharacterCollision, clampToFieldBounds } from
 
 // Reset
 export { resetSpine } from './reset';
+
+// Body self-collision
+export { resolveBodySelfCollision } from './body-collision';
