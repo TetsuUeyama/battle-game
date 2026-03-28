@@ -37,6 +37,9 @@ import { handleCloseIn } from '../states/close-in';
 import { handleAttack } from '../states/attack';
 import { handleRetreat } from '../states/retreat';
 import { handleRecover } from '../states/recover';
+import { handleGuard } from '../states/guard';
+import { handleSwingDefence } from '../states/swing-defence';
+import { handleAvoidance } from '../states/avoidance';
 
 const STATE_HANDLERS: Record<CombatAIState, StateHandler> = {
   idle: handleIdle,
@@ -46,6 +49,9 @@ const STATE_HANDLERS: Record<CombatAIState, StateHandler> = {
   attack: handleAttack,
   retreat: handleRetreat,
   recover: handleRecover,
+  guard: handleGuard,
+  swing_defence: handleSwingDefence,
+  avoidance: handleAvoidance,
 };
 
 // ─── ファクトリ ──────────────────────────────────────────

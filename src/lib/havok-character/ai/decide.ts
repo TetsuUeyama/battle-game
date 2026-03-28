@@ -186,7 +186,29 @@ function decideComboContine(s: Situation): boolean {
 
 // ─── ステート遷移 ────────────────────────────────────────
 
+// 防御クールダウン (同じAIが連続防御しないようにする)
+const _defenceCooldowns = new WeakMap<object, number>();
+
 function decideNextState(s: Situation, ai: CombatAI): CombatAIState | null {
+  // ─── 防御行動の割り込み判定 ───
+  // circle / close_in ステートからのみ発動 (それ以外では攻撃・移動を優先)
+  if (ai.mode === 'character'
+      && (ai.state === 'circle' || ai.state === 'close_in')) {
+    // クールダウン中は防御しない
+    const cooldown = _defenceCooldowns.get(ai) ?? 0;
+    if (cooldown <= 0) {
+      const defenceAction = decideDefenceAction(s);
+      if (defenceAction) {
+        // 防御後1.5秒間は再防御しない
+        _defenceCooldowns.set(ai, 1.5);
+        return defenceAction;
+      }
+    }
+  }
+  // クールダウン減算 (dtが渡されないのでSituation内の情報で代用)
+  const cd = _defenceCooldowns.get(ai) ?? 0;
+  if (cd > 0) _defenceCooldowns.set(ai, cd - 0.016); // ~60fps想定
+
   switch (ai.state) {
     case 'idle':
       if (s.inPursueRange) return 'pursue';
@@ -214,11 +236,22 @@ function decideNextState(s: Situation, ai: CombatAI): CombatAIState | null {
     case 'close_in':
       if (s.inAttackRange) return 'attack';
       if (s.tooFarForCloseIn) return 'pursue';
-      // 相手が攻撃を始めた → 一旦引いて回避
-      if (s.opponentInStrike && s.opponentTipDist < 1.5) return 'pursue';
       break;
 
     case 'attack':
+      break;
+
+    case 'guard':
+      // ガード中: 相手の攻撃が終わったら circle に戻る
+      if (!s.opponentAttacking) return 'circle';
+      break;
+
+    case 'swing_defence':
+      // 防御スイング中: ステート内で完了判定 → circle に自動遷移
+      break;
+
+    case 'avoidance':
+      // 回避中: ステート内で完了判定 → circle に自動遷移
       break;
 
     case 'retreat':
@@ -270,6 +303,39 @@ function decideCircleParams(s: Situation): { circleDir: number; circleDuration: 
   }
 
   return { circleDir, circleDuration };
+}
+
+// ─── 防御行動選択 ────────────────────────────────────────
+
+/**
+ * 相手の攻撃状況に応じて防御行動を選択。
+ * null = 防御不要 (攻撃されていない or 距離が遠い)
+ */
+function decideDefenceAction(s: Situation): CombatAIState | null {
+  // 相手が攻撃していない → 防御不要
+  if (!s.opponentAttacking) return null;
+
+  // 相手の武器先端が遠い → まだ当たらない
+  if (s.opponentTipDist > 1.5) return null;
+
+  // ─── 武器先端が非常に近い: 確実に防御 ───
+
+  // 相手の打撃フェーズ + 非常に近い → 回避 (最優先, 50%の確率)
+  if (s.opponentInStrike && s.opponentTipDist < 0.8 && Math.random() < 0.5) {
+    return 'avoidance';
+  }
+
+  // 相手が振りかぶり中 + 近い → 重量有利なら弾き返し (40%の確率)
+  if (s.opponentInWindup && s.opponentTipDist < 1.0 && s.hasWeightAdvantage && Math.random() < 0.4) {
+    return 'swing_defence';
+  }
+
+  // 相手の打撃フェーズ + 近い → ガード (35%の確率)
+  if (s.opponentInStrike && s.opponentTipDist < 1.2 && Math.random() < 0.35) {
+    return 'guard';
+  }
+
+  return null;
 }
 
 // ─── 武器カテゴリ別基本重み ──────────────────────────────

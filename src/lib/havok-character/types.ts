@@ -395,7 +395,7 @@ export function neutralBody(): BodyMotion {
 
 // ─── Combat AI Types ─────────────────────────────────────
 
-export type CombatAIState = 'idle' | 'pursue' | 'circle' | 'close_in' | 'attack' | 'retreat' | 'recover';
+export type CombatAIState = 'idle' | 'pursue' | 'circle' | 'close_in' | 'attack' | 'retreat' | 'recover' | 'guard' | 'swing_defence' | 'avoidance';
 export type CombatAIMode = 'target' | 'character'; // 標的追尾 or 対キャラ
 
 export interface CombatAI {
