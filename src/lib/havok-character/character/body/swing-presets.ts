@@ -28,30 +28,33 @@ export interface SwingPreset {
 
 export const SWING_PRESETS: Record<string, SwingPreset> = {
   // ─── 標的練習用 (createSwingMotion) ───
+  // 縦振り: 振りかぶり=後傾(lean-), 打撃=前傾(lean+)
   vertical: {
-    windup: { torsoLean: -0.15, torsoTwist: 0.1, hipsOffset: 0.02, hipsForward: -0.03, footStepR: -0.05, offHand: [-0.05, 0.1, -0.05] },
-    strike: { torsoLean: 0.35, torsoTwist: -0.05, hipsOffset: -0.08, hipsForward: 0.08, footStepR: 0.12, offHand: [0.1, -0.1, 0.05] },
+    windup: { torsoLean: -0.5, torsoTwist: 0.05, hipsOffset: 0.02, hipsForward: -0.05, footStepR: -0.05, offHand: [-0.05, 0.1, -0.05] },
+    strike: { torsoLean: 0.6, torsoTwist: -0.05, hipsOffset: -0.08, hipsForward: 0.1, footStepR: 0.12, offHand: [0.1, -0.1, 0.05] },
   },
+  // 横振り: 振りかぶり=左ひねり(twist-) → 打撃=右ひねり(twist+)
   horizontal: {
-    windup: { torsoLean: 0, torsoTwist: 0.35, hipsOffset: 0, hipsForward: -0.02, footStepR: 0.05, offHand: [-0.1, 0.05, -0.08] },
-    strike: { torsoLean: 0.1, torsoTwist: -0.3, hipsOffset: -0.03, hipsForward: 0.05, footStepR: -0.03, offHand: [0.15, -0.05, 0.1] },
+    windup: { torsoLean: 0, torsoTwist: -0.7, hipsOffset: 0, hipsForward: -0.02, footStepR: 0.05, offHand: [-0.1, 0.05, -0.08] },
+    strike: { torsoLean: 0.1, torsoTwist: 0.7, hipsOffset: -0.03, hipsForward: 0.05, footStepR: -0.03, offHand: [0.15, -0.05, 0.1] },
   },
+  // 突き: 振りかぶり=後傾+少し左ひねり, 打撃=前傾+踏み込み
   thrust: {
-    windup: { torsoLean: -0.1, torsoTwist: 0.1, hipsOffset: 0.02, hipsForward: -0.08, footStepR: -0.08, offHand: [-0.08, 0.05, -0.1] },
-    strike: { torsoLean: 0.25, torsoTwist: -0.05, hipsOffset: -0.04, hipsForward: 0.15, footStepR: 0.18, offHand: [0.05, -0.08, 0] },
+    windup: { torsoLean: -0.3, torsoTwist: -0.1, hipsOffset: 0.02, hipsForward: -0.1, footStepR: -0.08, offHand: [-0.08, 0.05, -0.1] },
+    strike: { torsoLean: 0.4, torsoTwist: 0.05, hipsOffset: -0.04, hipsForward: 0.2, footStepR: 0.18, offHand: [0.05, -0.08, 0] },
   },
-  // ─── 対キャラAI用 (close_in): やや大きめの値 ───
+  // ─── 対キャラAI用 (close_in): さらに大きめ ───
   vertical_vs: {
-    windup: { torsoLean: -0.25, torsoTwist: 0.15, hipsOffset: 0.03, hipsForward: -0.08, footStepR: -0.1, offHand: [-0.05, 0.1, -0.05] },
-    strike: { torsoLean: 0.5, torsoTwist: -0.1, hipsOffset: -0.12, hipsForward: 0.2, footStepR: 0.25, offHand: [0.1, -0.1, 0.05] },
+    windup: { torsoLean: -0.7, torsoTwist: 0.05, hipsOffset: 0.03, hipsForward: -0.08, footStepR: -0.1, offHand: [-0.05, 0.1, -0.05] },
+    strike: { torsoLean: 0.8, torsoTwist: -0.05, hipsOffset: -0.12, hipsForward: 0.2, footStepR: 0.25, offHand: [0.1, -0.1, 0.05] },
   },
   horizontal_vs: {
-    windup: { torsoLean: -0.1, torsoTwist: 0.8, hipsOffset: 0.02, hipsForward: -0.05, footStepR: 0.12, offHand: [-0.2, 0.08, -0.15] },
-    strike: { torsoLean: 0.2, torsoTwist: -0.8, hipsOffset: -0.06, hipsForward: 0.1, footStepR: -0.1, offHand: [0.25, -0.08, 0.2] },
+    windup: { torsoLean: -0.1, torsoTwist: -0.9, hipsOffset: 0.02, hipsForward: -0.05, footStepR: 0.12, offHand: [-0.2, 0.08, -0.15] },
+    strike: { torsoLean: 0.15, torsoTwist: 0.9, hipsOffset: -0.06, hipsForward: 0.1, footStepR: -0.1, offHand: [0.25, -0.08, 0.2] },
   },
   thrust_vs: {
-    windup: { torsoLean: -0.15, torsoTwist: 0.15, hipsOffset: 0.03, hipsForward: -0.15, footStepR: -0.12, offHand: [-0.08, 0.05, -0.1] },
-    strike: { torsoLean: 0.35, torsoTwist: -0.1, hipsOffset: -0.06, hipsForward: 0.25, footStepR: 0.3, offHand: [0.05, -0.08, 0] },
+    windup: { torsoLean: -0.4, torsoTwist: -0.15, hipsOffset: 0.03, hipsForward: -0.15, footStepR: -0.12, offHand: [-0.08, 0.05, -0.1] },
+    strike: { torsoLean: 0.5, torsoTwist: 0.1, hipsOffset: -0.06, hipsForward: 0.25, footStepR: 0.3, offHand: [0.05, -0.08, 0] },
   },
 };
 

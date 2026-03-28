@@ -101,7 +101,6 @@ export function useHavokTestState(): [HavokTestState, HavokTestActions] {
   const [motionTestPower, setMotionTestPower] = useState(80);
   const [motionTestPlaying, setMotionTestPlaying] = useState(false);
   const [jointAngles, setJointAngles] = useState<Record<string, number>>({});
-
   const state: HavokTestState = {
     status, selectedBone,
     rotX, rotY, rotZ, posX, posY, posZ,

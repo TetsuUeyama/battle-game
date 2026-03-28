@@ -8,7 +8,7 @@ import { getWorldPos } from '@/lib/math-utils';
 import { getCharacterDirections } from './directions';
 import { getOffHandRestPosition } from '../weapon/stance';
 import {
-  solveIK2Bone, clampJointAngles,
+  solveIK2Bone, clampJointAngles, clampShoulderX, clampArmRotation, clampSpineRotation,
   updateFootStepping, calculateCenterOfMass, updateDebugVisuals, keepFootHorizontal,
 } from './index';
 import { updateWeaponPower } from '../weapon';
@@ -50,6 +50,11 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     clampJointAngles(chains.rightLeg, character, 'leg');
     clampJointAngles(chains.leftArm, character, 'arm');
     clampJointAngles(chains.rightArm, character, 'arm');
+
+    // 3軸制限 (Spine → Shoulder → Arm の順: 体幹から末端へ)
+    clampSpineRotation(character);
+    clampShoulderX(character);
+    clampArmRotation(character);
 
     if (pass === 0) {
       // 関節レディネス: まっすぐすぎる関節を最小曲げ角まで戻す

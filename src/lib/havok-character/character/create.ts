@@ -224,6 +224,17 @@ export async function createHavokCharacter(
     });
   }
 
+  // Spine / Spine1 / Spine2 / Head の初期回転も保存 (applyBodyMotion / clampSpineRotation 用)
+  for (const boneName of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2', 'mixamorig:Head']) {
+    const bone = allBones.get(boneName);
+    if (bone?.rotationQuaternion) {
+      character.ikBaseRotations.set(bone.name, {
+        root: bone.rotationQuaternion.clone(),
+        mid: Quaternion.Identity(),
+      });
+    }
+  }
+
   const lFootBone = allBones.get('mixamorig:LeftFoot');
   const rFootBone = allBones.get('mixamorig:RightFoot');
   if (lFootBone) {

@@ -16,7 +16,7 @@
 export { getCharacterDirections } from './directions';
 
 // IK solver
-export { solveIK2Bone, clampJointAngles, createIKChains } from './ik-solver';
+export { solveIK2Bone, clampJointAngles, clampShoulderX, clampArmRotation, clampSpineRotation, createIKChains } from './ik-solver';
 
 // Foot planting & balance
 export {
@@ -51,3 +51,4 @@ export { computeForceMultiplier, computeForceDetails, computeChainForce } from '
 
 // Joint readiness
 export { maintainJointReadiness } from './joint-readiness';
+

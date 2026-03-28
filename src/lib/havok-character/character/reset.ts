@@ -3,11 +3,12 @@
  */
 import type { HavokCharacter } from '../types';
 
-/** 胴体回転を T-pose にリセットする。 */
+/** Spine / Spine1 / Spine2 の回転を T-pose にリセットする。 */
 export function resetSpine(character: HavokCharacter): void {
-  const spine = character.allBones.get('mixamorig:Spine1');
-  if (spine) {
-    const baseRot = character.ikBaseRotations.get(spine.name);
-    if (baseRot) spine.rotationQuaternion = baseRot.root.clone();
+  for (const boneName of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2']) {
+    const bone = character.allBones.get(boneName);
+    if (!bone) continue;
+    const baseRot = character.ikBaseRotations.get(bone.name);
+    if (baseRot) bone.rotationQuaternion = baseRot.root.clone();
   }
 }

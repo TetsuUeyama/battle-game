@@ -18,7 +18,7 @@
  */
 
 export { JOINT_CONFIG } from './joints';
-export type { JointLimitDef } from './joints';
+export type { JointLimitDef, AxisLimitDeg, AxisLimits3 } from './joints';
 
 export { MASS_DISTRIBUTION } from './mass';
 

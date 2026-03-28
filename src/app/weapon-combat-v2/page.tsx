@@ -95,6 +95,47 @@ export default function WeaponCombatV2Page() {
     let ko1: KnockoutState = createKnockoutState();
     let ko2: KnockoutState = createKnockoutState();
 
+    /** KO後のキャラクターを立ち状態にリセット */
+    function resetCharacter(char: HavokCharacter) {
+      // root位置を初期化 (回転はteleportCharacterが設定するので触らない)
+      char.root.position.set(0, 0, 0);
+
+      // IKウェイト復帰
+      char.ikChains.leftLeg.weight = 1;
+      char.ikChains.rightLeg.weight = 1;
+      char.ikChains.leftArm.weight = 0;
+      char.ikChains.rightArm.weight = 0;
+
+      // Spine回転をT-poseにリセット
+      for (const sn of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2']) {
+        const bone = char.allBones.get(sn);
+        if (bone) {
+          const br = char.ikBaseRotations.get(bone.name);
+          if (br) bone.rotationQuaternion = br.root.clone();
+        }
+      }
+
+      // Hips位置リセット
+      const hips = char.allBones.get('mixamorig:Hips');
+      if (hips) hips.position.y = char.hipsBaseY;
+
+      // ジャンプ状態リセット
+      char.jumpState.active = false;
+      char.jumpState.heightOffset = 0;
+      char.jumpState.velocityY = 0;
+
+      // バランスリセット
+      char.balance.staggered = false;
+      char.balance.deviation = 0;
+      char.balance.staggerIntensity = 0;
+      char.balance.staggerTimer = 0;
+
+      // スイング状態リセット
+      char.weaponSwing.swinging = false;
+      char.weaponSwing.power = 0;
+      char.weaponSwing.tipSpeed = 0;
+    }
+
     const eventLog: string[] = [];
     function addEvent(msg: string) {
       eventLog.unshift(msg);
@@ -137,7 +178,7 @@ export default function WeaponCombatV2Page() {
 
         // 戦闘開始関数を登録 (UIから呼び出せるようにする)
         startFightRef.current = async (w1Key: string, w2Key: string) => {
-          if (!char1 || !char2 || matchEnded) return;
+          if (!char1 || !char2) return;
 
           const w1Info = weapons.find(w => w.pieceKey === w1Key);
           const w2Info = weapons.find(w => w.pieceKey === w2Key);
@@ -147,6 +188,15 @@ export default function WeaponCombatV2Page() {
           }
 
           try {
+            // キャラクターをリセット (KO後の状態を復帰)
+            resetCharacter(char1);
+            resetCharacter(char2);
+
+            // 初期位置に再配置
+            teleportCharacter(char1, new Vector3(0, 0, -2), 0);
+            teleportCharacter(char2, new Vector3(0, 0, 2), Math.PI);
+
+            // 武器装備
             await equipGameAssetWeapon(scene, char1, w1Info, 'front');
             await equipGameAssetWeapon(scene, char2, w2Info, 'front');
 
@@ -388,9 +438,20 @@ export default function WeaponCombatV2Page() {
           textShadow: '0 0 20px rgba(255,100,100,0.8)', textAlign: 'center',
         }}>
           {matchResult}
-          <div style={{ fontSize: 14, color: '#aaa', marginTop: 12 }}>
-            Reload to restart
-          </div>
+          <button
+            onClick={() => {
+              setMatchResult(null);
+              setFightStarted(false);
+            }}
+            style={{
+              display: 'block', margin: '16px auto 0', padding: '10px 32px',
+              fontSize: 16, fontWeight: 'bold',
+              background: '#e44', color: '#fff', border: 'none', borderRadius: 6,
+              cursor: 'pointer',
+            }}
+          >
+            REMATCH
+          </button>
         </div>
       )}
 

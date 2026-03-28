@@ -99,9 +99,13 @@ export function updateClashReaction(
   if (clash.timer <= 0) {
     clash.staggered = false;
     clash.wobbleIntensity = 0;
-    if (spineBone) {
-      const baseRot = character.ikBaseRotations.get(spineBone.name);
-      if (baseRot) spineBone.rotationQuaternion = baseRot.root.clone();
+    // Spine / Spine1 / Spine2 を全てリセット
+    for (const sn of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2']) {
+      const sb = character.allBones.get(sn);
+      if (sb) {
+        const br = character.ikBaseRotations.get(sb.name);
+        if (br) sb.rotationQuaternion = br.root.clone();
+      }
     }
   }
 }

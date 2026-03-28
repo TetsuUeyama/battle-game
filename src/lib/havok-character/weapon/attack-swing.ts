@@ -19,7 +19,7 @@ import { neutralBody } from '../types';
 import { getWorldPos } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
 import { getOffHandRestPosition } from './stance';
-import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset } from '../character/body';
+import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset, JOINT_CONFIG } from '../character/body';
 import { computeForceMultiplier } from '../character/force-propagation';
 
 // ─── Weapon Scale Factors ────────────────────────────────
@@ -313,9 +313,15 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
 
 /**
  * ボディモーションをキャラクターに適用。
- * 力の伝達倍率を自動計算し、関節が曲がっているほど体全体の動きが大きくなる。
- * まっすぐな関節が多い → 手打ち (体が動かない)
- * 関節がしっかり曲がっている → 全身を使った振り
+ *
+ * Spine / Spine1 / Spine2 の3つに回転を分散して大きな弧を描く:
+ *   横振り: torsoTwist をY軸回転として3骨に配分 → 上半身全体がひねる
+ *   縦振り: torsoLean をX軸回転として3骨に配分 → 上半身全体が前傾/後傾
+ *
+ * 各Spineへの配分率:
+ *   Spine  (腰上): 30% — 下半身に近いので小さめ
+ *   Spine1 (胸):   45% — メインの回転
+ *   Spine2 (上胸): 25% — 肩に近いので補助
  */
 export function applyBodyMotion(
   character: HavokCharacter,
@@ -323,19 +329,48 @@ export function applyBodyMotion(
   forward: Vector3,
   charRight: Vector3,
 ): void {
-  // 力の伝達倍率: 関節の曲がり具合から自動計算 (0.2〜1.0)
   const fm = computeForceMultiplier(character);
 
-  const spineBone = character.allBones.get('mixamorig:Spine1');
-  if (spineBone) {
-    const baseRot = character.ikBaseRotations.get(spineBone.name);
-    if (baseRot) {
-      const leanQuat = Quaternion.RotationAxis(charRight, body.torsoLean * fm);
-      const twistQuat = Quaternion.RotationAxis(Vector3.Up(), body.torsoTwist * fm);
-      spineBone.rotationQuaternion = twistQuat.multiply(leanQuat).multiply(baseRot.root);
-    }
+  // torsoLean/torsoTwist を -1〜+1 の「使用率」として解釈し、
+  // 各Spineの可動域制限の端まで回転させる。
+  // lean>0 → 前傾 (X軸 max方向), lean<0 → 後傾 (X軸 min方向)
+  // twist>0 → 右ひねり (Y軸 max方向), twist<0 → 左ひねり (Y軸 min方向)
+  const leanNorm = Math.max(-1, Math.min(1, body.torsoLean * fm * 3.0));  // radを正規化 (0.35rad≒1.0)
+  const twistNorm = Math.max(-1, Math.min(1, body.torsoTwist * fm * 1.5));
+
+  const spineConfigs = [
+    { name: 'mixamorig:Spine',  limits: JOINT_CONFIG.spine },
+    { name: 'mixamorig:Spine1', limits: JOINT_CONFIG.spine1 },
+    { name: 'mixamorig:Spine2', limits: JOINT_CONFIG.spine2 },
+  ] as const;
+
+  const toRad = Math.PI / 180;
+
+  for (const { name, limits } of spineConfigs) {
+    const bone = character.allBones.get(name);
+    if (!bone) continue;
+
+    const ikBase = character.ikBaseRotations.get(bone.name);
+    if (!ikBase) continue;
+    const baseQ = ikBase.root;
+
+    // X軸: leanNorm の符号に応じて min or max まで回転
+    const xDeg = leanNorm >= 0
+      ? leanNorm * limits.x.max
+      : -leanNorm * limits.x.min;
+
+    // Y軸: twistNorm の符号に応じて min or max まで回転
+    const yDeg = twistNorm >= 0
+      ? twistNorm * limits.y.max
+      : -twistNorm * limits.y.min;
+
+    // charRight軸の正回転が後傾になるため符号反転
+    const leanQuat = Quaternion.RotationAxis(charRight, -xDeg * toRad);
+    const twistQuat = Quaternion.RotationAxis(Vector3.Up(), yDeg * toRad);
+    bone.rotationQuaternion = twistQuat.multiply(leanQuat).multiply(baseQ);
   }
 
+  // 腰
   const hipsBone = character.allBones.get('mixamorig:Hips');
   if (hipsBone) {
     hipsBone.position.y = character.hipsBaseY + body.hipsOffset * fm;
@@ -344,6 +379,7 @@ export function applyBodyMotion(
     character.root.position.addInPlace(forward.scale(body.hipsForward * fm));
   }
 
+  // オフハンド
   if (character.weapon && character.weapon.gripType === 'one-handed'
       && character.ikChains.rightArm.weight > 0) {
     const restPos = getOffHandRestPosition(character);

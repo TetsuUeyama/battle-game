@@ -1,9 +1,10 @@
 /**
  * Havok Character System — 2-Bone IK solver and joint angle limits.
  */
-import { Vector3, Quaternion, TransformNode } from '@babylonjs/core';
+import { Vector3, Quaternion, Matrix, TransformNode } from '@babylonjs/core';
 import type { IKChain, HavokCharacter } from '../types';
 import { JOINT_LIMITS } from '../types';
+import { JOINT_CONFIG } from './body/joints';
 import {
   getWorldPos, distanceBetweenBones, rotationBetweenVectors, applyWorldDeltaRotation,
 } from '@/lib/math-utils';
@@ -171,4 +172,111 @@ export function createIKChains(
     leftLeg:  makeChain('mixamorig:LeftUpLeg', 'mixamorig:LeftLeg', 'mixamorig:LeftFoot', new Vector3(0, 0, 1)),
     rightLeg: makeChain('mixamorig:RightUpLeg', 'mixamorig:RightLeg', 'mixamorig:RightFoot', new Vector3(0, 0, 1)),
   };
+}
+
+// ─── 3軸制限の共通ヘルパー ──────────────────────────────
+
+const _boneBaseRots = new WeakMap<object, Map<string, Quaternion>>();
+
+/** T-pose基準回転を取得 (初回呼び出し時に記録) */
+function getBoneBaseRot(character: HavokCharacter, boneName: string): Quaternion | null {
+  if (!_boneBaseRots.has(character)) _boneBaseRots.set(character, new Map());
+  const map = _boneBaseRots.get(character)!;
+  const bone = character.allBones.get(boneName);
+  if (!bone?.rotationQuaternion) return null;
+  if (!map.has(boneName)) {
+    map.set(boneName, bone.rotationQuaternion.clone());
+  }
+  return map.get(boneName)!;
+}
+
+/** Quaternion → Euler XYZ (degrees) */
+function deltaToEulerDeg(delta: Quaternion): { x: number; y: number; z: number } {
+  const m = new Matrix();
+  delta.toRotationMatrix(m);
+  const d = m.m;
+  const sy = Math.max(-1, Math.min(1, d[2]));
+  const toDeg = 180 / Math.PI;
+  if (Math.abs(sy) < 0.9999) {
+    return { x: Math.atan2(-d[6], d[10]) * toDeg, y: Math.asin(sy) * toDeg, z: Math.atan2(-d[1], d[0]) * toDeg };
+  }
+  return { x: Math.atan2(d[9], d[5]) * toDeg, y: (sy > 0 ? 90 : -90), z: 0 };
+}
+
+/** Euler XYZ (degrees) → Quaternion */
+function eulerDegToQuat(x: number, y: number, z: number): Quaternion {
+  const r = Math.PI / 180;
+  const qx = Quaternion.RotationAxis(new Vector3(1, 0, 0), x * r);
+  const qy = Quaternion.RotationAxis(new Vector3(0, 1, 0), y * r);
+  const qz = Quaternion.RotationAxis(new Vector3(0, 0, 1), z * r);
+  return qz.multiply(qy.multiply(qx));
+}
+
+function clampVal(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+/** ボーンのXYZ回転を制限付きでクランプ */
+function clampBone3Axis(
+  character: HavokCharacter,
+  boneName: string,
+  limX: { min: number; max: number },
+  limY: { min: number; max: number },
+  limZ: { min: number; max: number },
+): void {
+  const bone = character.allBones.get(boneName);
+  if (!bone?.rotationQuaternion) return;
+  const baseQ = getBoneBaseRot(character, boneName);
+  if (!baseQ) return;
+
+  const baseInv = baseQ.clone(); baseInv.invertInPlace();
+  const delta = bone.rotationQuaternion.multiply(baseInv);
+  const e = deltaToEulerDeg(delta);
+
+  const cx = clampVal(e.x, limX.min, limX.max);
+  const cy = clampVal(e.y, limY.min, limY.max);
+  const cz = clampVal(e.z, limZ.min, limZ.max);
+
+  if (Math.abs(cx - e.x) > 0.5 || Math.abs(cy - e.y) > 0.5 || Math.abs(cz - e.z) > 0.5) {
+    bone.rotationQuaternion = eulerDegToQuat(cx, cy, cz).multiply(baseQ);
+  }
+}
+
+/**
+ * Shoulder (鎖骨) のXYZ 3軸回転を制限する。
+ */
+export function clampShoulderX(character: HavokCharacter): void {
+  const s = JOINT_CONFIG.shoulder;
+  clampBone3Axis(character, 'mixamorig:LeftShoulder', s.x, s.y, s.z);
+  clampBone3Axis(character, 'mixamorig:RightShoulder', s.x, s.y, s.z);
+}
+
+/**
+ * Arm (上腕・前腕) のXYZ 3軸回転を制限する。
+ * スイング中はスキップ (IKがターゲットに腕を伸ばすのを妨げない)。
+ */
+export function clampArmRotation(character: HavokCharacter): void {
+  if (character.weaponSwing.swinging) return;
+
+  const ua = JOINT_CONFIG.arm.upperArm;
+  clampBone3Axis(character, 'mixamorig:LeftArm', ua.x, ua.y, ua.z);
+  clampBone3Axis(character, 'mixamorig:RightArm', ua.x, ua.y, ua.z);
+
+  const fa = JOINT_CONFIG.arm.foreArm;
+  clampBone3Axis(character, 'mixamorig:LeftForeArm', fa.x, fa.y, fa.z);
+  clampBone3Axis(character, 'mixamorig:RightForeArm', fa.x, fa.y, fa.z);
+}
+
+/**
+ * Spine1/Spine2 のXYZ 3軸回転を制限する。
+ */
+export function clampSpineRotation(character: HavokCharacter): void {
+  const s0 = JOINT_CONFIG.spine;
+  clampBone3Axis(character, 'mixamorig:Spine', s0.x, s0.y, s0.z);
+
+  const s1 = JOINT_CONFIG.spine1;
+  clampBone3Axis(character, 'mixamorig:Spine1', s1.x, s1.y, s1.z);
+
+  const s2 = JOINT_CONFIG.spine2;
+  clampBone3Axis(character, 'mixamorig:Spine2', s2.x, s2.y, s2.z);
 }

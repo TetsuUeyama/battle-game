@@ -36,11 +36,17 @@ const CORRECTION_SPEED = 0.15;
  * updateHavokCharacter() 内で IK + clamp の後に呼び出す。
  */
 export function maintainJointReadiness(character: HavokCharacter, dt: number): void {
+  // スイング中は腕のレディネスをスキップ (リーチと加速を最大化するため腕を伸ばしきる)
+  const swinging = character.weaponSwing.swinging;
   const chains = character.ikChains;
 
   for (const [chainName, chain] of Object.entries(chains) as [string, IKChain][]) {
     const minBend = MIN_READY_BEND[chainName];
     if (minBend === undefined || chain.weight <= 0) continue;
+
+    // スイング中は腕のレディネスをスキップ → 腕を伸ばしきってリーチ最大化
+    const isArm = chainName === 'leftArm' || chainName === 'rightArm';
+    if (swinging && isArm) continue;
 
     // mid joint (肘/膝) の現在の曲げ角度を計算
     chain.root.computeWorldMatrix(true);
