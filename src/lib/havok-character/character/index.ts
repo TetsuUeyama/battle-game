@@ -45,3 +45,9 @@ export { resetSpine } from './reset';
 
 // Body self-collision
 export { resolveBodySelfCollision } from './body-collision';
+
+// Force propagation
+export { computeForceMultiplier, computeForceDetails, computeChainForce } from './force-propagation';
+
+// Joint readiness
+export { maintainJointReadiness } from './joint-readiness';

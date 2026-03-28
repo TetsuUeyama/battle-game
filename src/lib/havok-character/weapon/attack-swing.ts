@@ -20,6 +20,7 @@ import { getWorldPos } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
 import { getOffHandRestPosition } from './stance';
 import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset } from '../character/body';
+import { computeForceMultiplier } from '../character/force-propagation';
 
 // ─── Weapon Scale Factors ────────────────────────────────
 
@@ -312,6 +313,9 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
 
 /**
  * ボディモーションをキャラクターに適用。
+ * 力の伝達倍率を自動計算し、関節が曲がっているほど体全体の動きが大きくなる。
+ * まっすぐな関節が多い → 手打ち (体が動かない)
+ * 関節がしっかり曲がっている → 全身を使った振り
  */
 export function applyBodyMotion(
   character: HavokCharacter,
@@ -319,31 +323,34 @@ export function applyBodyMotion(
   forward: Vector3,
   charRight: Vector3,
 ): void {
+  // 力の伝達倍率: 関節の曲がり具合から自動計算 (0.2〜1.0)
+  const fm = computeForceMultiplier(character);
+
   const spineBone = character.allBones.get('mixamorig:Spine1');
   if (spineBone) {
     const baseRot = character.ikBaseRotations.get(spineBone.name);
     if (baseRot) {
-      const leanQuat = Quaternion.RotationAxis(charRight, body.torsoLean);
-      const twistQuat = Quaternion.RotationAxis(Vector3.Up(), body.torsoTwist);
+      const leanQuat = Quaternion.RotationAxis(charRight, body.torsoLean * fm);
+      const twistQuat = Quaternion.RotationAxis(Vector3.Up(), body.torsoTwist * fm);
       spineBone.rotationQuaternion = twistQuat.multiply(leanQuat).multiply(baseRot.root);
     }
   }
 
   const hipsBone = character.allBones.get('mixamorig:Hips');
   if (hipsBone) {
-    hipsBone.position.y = character.hipsBaseY + body.hipsOffset;
+    hipsBone.position.y = character.hipsBaseY + body.hipsOffset * fm;
   }
   if (Math.abs(body.hipsForward) > 0.001) {
-    character.root.position.addInPlace(forward.scale(body.hipsForward));
+    character.root.position.addInPlace(forward.scale(body.hipsForward * fm));
   }
 
   if (character.weapon && character.weapon.gripType === 'one-handed'
       && character.ikChains.rightArm.weight > 0) {
     const restPos = getOffHandRestPosition(character);
     if (restPos) {
-      const offset = forward.scale(body.offHandOffset.x)
-        .add(Vector3.Up().scale(body.offHandOffset.y))
-        .add(charRight.scale(body.offHandOffset.z));
+      const offset = forward.scale(body.offHandOffset.x * fm)
+        .add(Vector3.Up().scale(body.offHandOffset.y * fm))
+        .add(charRight.scale(body.offHandOffset.z * fm));
       character.ikChains.rightArm.target.copyFrom(restPos.add(offset));
     }
   }

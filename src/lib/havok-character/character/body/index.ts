@@ -38,3 +38,6 @@ export { PHYSICS_CONFIG } from './physics';
 export { TURN_CONFIG } from './turn';
 
 export { AI_PARAMS } from './ai-params';
+
+export { FORCE_CHAINS, FORCE_CHAIN_PARAMS, CHAIN_RIGHT_ATTACK, CHAIN_LEFT_ATTACK } from './force-chain';
+export type { JointForceParams, ForceChain, ForceOutput } from './force-chain';

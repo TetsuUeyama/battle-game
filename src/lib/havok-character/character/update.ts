@@ -14,6 +14,7 @@ import {
 import { updateWeaponPower } from '../weapon';
 import { updateJump } from '../actions/jump';
 import { resolveBodySelfCollision } from './body-collision';
+import { maintainJointReadiness } from './joint-readiness';
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
   const deltaTime = dt ?? (1 / 60);
@@ -38,7 +39,7 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     chains.rightArm.poleHint.copyFrom(backward);
   }
 
-  // IKソルブ → 関節クランプ → 自己貫通チェック → 再IK (最大2回)
+  // IKソルブ → 関節クランプ → 関節レディネス → 自己貫通チェック → 再IK (最大2回)
   for (let pass = 0; pass < 2; pass++) {
     solveIK2Bone(chains.leftLeg, character);
     solveIK2Bone(chains.rightLeg, character);
@@ -50,9 +51,10 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     clampJointAngles(chains.leftArm, character, 'arm');
     clampJointAngles(chains.rightArm, character, 'arm');
 
-    // 自己貫通チェック: IKターゲットを押し戻す
-    // 2パス目は押し戻し後のIK再解決
     if (pass === 0) {
+      // 関節レディネス: まっすぐすぎる関節を最小曲げ角まで戻す
+      maintainJointReadiness(character, deltaTime);
+      // 自己貫通チェック: IKターゲットを押し戻す
       resolveBodySelfCollision(character);
     }
   }
