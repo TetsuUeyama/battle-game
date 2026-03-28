@@ -6,37 +6,24 @@ import {
   Vector3, Color3, Color4, MeshBuilder, StandardMaterial, Quaternion,
 } from '@babylonjs/core';
 import {
-  initHavok, createHavokCharacter, updateHavokCharacter,
+  createHavokCharacter, updateHavokCharacter,
+  teleportCharacter, resolveCharacterCollision, clampToFieldBounds,
+} from '@/lib/havok-character/character';
+import {
   fetchGameAssetWeapons, equipGameAssetWeapon,
+} from '@/lib/havok-character/weapon';
+import {
   createCombatAIvsCharacter, updateCombatAIvsCharacter,
-  resolveCharacterCollision, teleportCharacter, clampToFieldBounds,
-  getWeaponTipWorld,
-  createClashState, checkWeaponClash, updateClashReaction,
-  updateBalance,
-  type ClashState,
-  type HavokCharacter, type CombatAI, type GameAssetWeaponInfo,
-} from '@/lib/havok-character';
-import { ParticleFxSystem, PRESET_BLOOD, type FluidPreset } from '@/lib/particle-fx';
-
-// 火花プリセット
-const PRESET_SPARK: FluidPreset = {
-  name: 'Spark',
-  color: new Color3(1.0, 0.8, 0.2),
-  specular: new Color3(1.0, 1.0, 0.8),
-  residueColor: new Color3(0.3, 0.2, 0.05),
-  alpha: 1.0,
-  residueAlpha: 0,
-  particleSize: 0.012,
-  gravityMul: 0.5,
-  airResistance: 0.8,
-  dripSpeed: 0,
-  dripDelay: [10, 10],
-  splashOnGround: false,
-  splashOnMesh: false,
-  splashMul: 0,
-  speedMul: 1.5,
-  verticalDamping: 0,
-};
+} from '@/lib/havok-character/ai';
+import {
+  checkWeaponClash, updateClashReaction,
+  emitHitBlood, emitClashSpark,
+  PRESET_COMBAT_BLOOD, PRESET_COMBAT_SPARK,
+} from '@/lib/havok-character/effects';
+import { updateBalance } from '@/lib/havok-character/character';
+import { createClashState } from '@/lib/havok-character/types';
+import type { ClashState, HavokCharacter, CombatAI, GameAssetWeaponInfo } from '@/lib/havok-character/types';
+import { ParticleFxSystem } from '@/lib/particle-fx';
 
 interface FighterHUD {
   hp: number;
@@ -84,10 +71,10 @@ export default function WeaponCombatV2Page() {
     ground.material = gMat;
 
     // Particle FX
-    const bloodFx = new ParticleFxSystem(scene, PRESET_BLOOD, {
+    const bloodFx = new ParticleFxSystem(scene, PRESET_COMBAT_BLOOD, {
       maxParticles: 200, maxResidues: 500, maxSticky: 200,
     });
-    const sparkFx = new ParticleFxSystem(scene, PRESET_SPARK, {
+    const sparkFx = new ParticleFxSystem(scene, PRESET_COMBAT_SPARK, {
       maxParticles: 100, maxResidues: 0, maxSticky: 0,
     });
 
@@ -110,7 +97,6 @@ export default function WeaponCombatV2Page() {
 
     (async () => {
       try {
-        await initHavok(scene);
         if (disposed) return;
 
         // 2体のキャラクター作成 (同一設定、原点で初期化)
@@ -206,49 +192,23 @@ export default function WeaponCombatV2Page() {
       const hit1 = updateCombatAIvsCharacter(ai1, char1, scene, dt);
       const hit2 = updateCombatAIvsCharacter(ai2, char2, scene, dt);
 
-      // ヒット処理 + パーティクル
+      // ヒット処理 + 血しぶきエフェクト
       if (hit1.hit && char2) {
         f2Hp = Math.max(0, f2Hp - hit1.damage);
         addEvent(`Fighter1 hits Fighter2! (-${hit1.damage} HP)`);
-        // 血しぶき: 武器先端位置から相手方向に噴出
-        const tip1 = getWeaponTipWorld(char1);
-        const hitDir1 = char2.root.position.subtract(char1.root.position).normalize();
-        bloodFx.emit({
-          origin: tip1,
-          pattern: { type: 'burst', normal: hitDir1, spread: 0.8 },
-          speed: 3.0,
-          count: 15 + hit1.damage,
-          sizeScale: 1.2,
-        });
+        emitHitBlood(char1, char2, hit1.damage, bloodFx);
       }
       if (hit2.hit && char1) {
         f1Hp = Math.max(0, f1Hp - hit2.damage);
         addEvent(`Fighter2 hits Fighter1! (-${hit2.damage} HP)`);
-        const tip2 = getWeaponTipWorld(char2);
-        const hitDir2 = char1.root.position.subtract(char2.root.position).normalize();
-        bloodFx.emit({
-          origin: tip2,
-          pattern: { type: 'burst', normal: hitDir2, spread: 0.8 },
-          speed: 3.0,
-          count: 15 + hit2.damage,
-          sizeScale: 1.2,
-        });
+        emitHitBlood(char2, char1, hit2.damage, bloodFx);
       }
 
       // 武器同士の衝突検知 → 火花 + 反動
       if (char1.weapon && char2.weapon) {
         const clashed = checkWeaponClash(char1, char2, clash1, clash2);
         if (clashed) {
-          const tip1 = getWeaponTipWorld(char1);
-          const tip2 = getWeaponTipWorld(char2);
-          const midPoint = Vector3.Lerp(tip1, tip2, 0.5);
-          sparkFx.emit({
-            origin: midPoint,
-            pattern: { type: 'burst', normal: Vector3.Up(), spread: 1.5 },
-            speed: 5.0,
-            count: 30,
-            sizeScale: 1.0,
-          });
+          emitClashSpark(char1, char2, sparkFx);
           addEvent('Weapons clash!');
         }
       }

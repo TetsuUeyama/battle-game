@@ -2,11 +2,11 @@
  * Havok Character System — 2-Bone IK solver and joint angle limits.
  */
 import { Vector3, Quaternion, TransformNode } from '@babylonjs/core';
-import type { IKChain, HavokCharacter } from './types';
-import { JOINT_LIMITS } from './types';
+import type { IKChain, HavokCharacter } from '../types';
+import { JOINT_LIMITS } from '../types';
 import {
   getWorldPos, distanceBetweenBones, rotationBetweenVectors, applyWorldDeltaRotation,
-} from './helpers';
+} from '@/lib/math-utils';
 
 /**
  * Analytic 2-bone IK solver operating on TransformNodes.

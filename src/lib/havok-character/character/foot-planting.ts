@@ -6,9 +6,12 @@ import {
 } from '@babylonjs/core';
 import type {
   IKChain, HavokCharacter, FootStep, FootStepper, DebugVisuals, BoneDataFile, CombatAI,
-} from './types';
-import { COM_WEIGHTS } from './types';
-import { getWorldPos, getCharacterDirections, getOffHandRestPosition } from './helpers';
+} from '../types';
+import { COM_WEIGHTS } from '../types';
+import { getWorldPos } from '@/lib/math-utils';
+import { getCharacterDirections } from './directions';
+import { getOffHandRestPosition } from '../weapon/stance';
+import { BALANCE_CONFIG } from './body';
 
 // ─── Center of Mass ──────────────────────────────────────
 
@@ -207,8 +210,7 @@ export function updateBalance(
   bal.deviation = getBalanceDeviation(com, lFoot, rFoot);
 
   // ─── よろめき判定 ───
-  const staggerThreshold = 0.08; // 8cm以上ずれたらよろめき
-  if (!bal.staggered && bal.deviation > staggerThreshold) {
+  if (!bal.staggered && bal.deviation > BALANCE_CONFIG.staggerThreshold) {
     bal.staggered = true;
     // よろめき時間: 逸脱度に比例 (0.3〜1.0秒)
     bal.staggerTimer = Math.min(1.0, 0.3 + bal.deviation * 3);
@@ -261,7 +263,7 @@ export function updateBalance(
   // ─── オフハンド自動バランス補正 ───
   // 重心がずれている方向の逆にオフハンドを移動 → 重心を実際に補正
   if (character.weapon && character.weapon.gripType === 'one-handed'
-      && character.ikChains.rightArm.weight > 0 && bal.deviation > 0.02) {
+      && character.ikChains.rightArm.weight > 0 && bal.deviation > BALANCE_CONFIG.offHandCorrectionThreshold) {
     const footCenter = lFoot.add(rFoot).scale(0.5);
     const comOffset = com.subtract(footCenter);
     comOffset.y = 0;

@@ -1,16 +1,29 @@
 /**
- * Havok Character System — Swing motion generation and application.
+ * 武器の振り方の定義。
+ *
+ * SwingMotion の生成・毎フレーム更新・ボディモーションのキャラクターへの適用を担当。
+ * 武器の長さ・重さに基づいて振りの大きさ・体の動き・速度を自動スケールする。
+ *
+ * ■ 攻撃タイプ
+ *   - vertical:    縦振り (振りかぶり→振り下ろし)
+ *   - horizontal:  横振り (薙ぎ払い)。arcSwing使用時は上半身回転で弧を描く
+ *   - thrust:      突き。前方直線的な軌道
+ *
+ * ■ モーション進行 (updateSwingMotion)
+ *   progress 0→windupRatio: 構え→振りかぶり (ease-in: t*t)
+ *   progress windupRatio→1: 振りかぶり→打撃 (ease-out: 1-(1-t)^2)
  */
-import {
-  Scene, Vector3, Color3, MeshBuilder, StandardMaterial, TransformNode, Quaternion,
-} from '@babylonjs/core';
-import type { HavokCharacter, SwingMotion, SwingFrame, BodyMotion, SwingType, WeaponPhysics } from './types';
-import { neutralBody } from './types';
-import { getWorldPos, getCharacterDirections, getStanceTargets, getOffHandRestPosition } from './helpers';
+import { Vector3, Quaternion } from '@babylonjs/core';
+import type { HavokCharacter, SwingMotion, SwingFrame, BodyMotion, SwingType, WeaponPhysics } from '../types';
+import { neutralBody } from '../types';
+import { getWorldPos } from '@/lib/math-utils';
+import { getCharacterDirections } from '../character/directions';
+import { getOffHandRestPosition } from './stance';
+import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset } from '../character/body';
 
 // ─── Weapon Scale Factors ────────────────────────────────
 
-interface WeaponScaleFactors {
+export interface WeaponScaleFactors {
   reachScale: number;
   arcScale: number;
   bodyCommitment: number;
@@ -18,114 +31,20 @@ interface WeaponScaleFactors {
   durationScale: number;
 }
 
-const BASE_LENGTH = 0.5;
-const BASE_WEIGHT = 1.0;
-
 export function getWeaponScaleFactors(weapon: WeaponPhysics): WeaponScaleFactors {
-  const ls = Math.max(0.8, Math.min(4.0, weapon.length / BASE_LENGTH));
-  const ws = Math.max(0.8, Math.min(10.0, weapon.weight / BASE_WEIGHT));
+  const ls = Math.max(WSC.minLengthScale, Math.min(WSC.maxLengthScale, weapon.length / WSC.baseLength));
+  const ws = Math.max(WSC.minLengthScale, Math.min(WSC.maxWeightScale, weapon.weight / WSC.baseWeight));
 
   return {
-    reachScale: Math.min(3.0, 1.0 + (ls - 1.0) * 0.5),
-    arcScale: Math.min(2.5, 1.0 + (ls - 1.0) * 0.3),
-    bodyCommitment: 1.0 + Math.min(ws - 1.0, 3.0) * 0.15,
-    gripCommitment: weapon.gripType === 'two-handed' ? 1.3 : 1.0,
-    durationScale: 1.0 + (ws - 1.0) * 0.06,
+    reachScale: Math.min(WSC.maxReachScale, 1.0 + (ls - 1.0) * WSC.reachFactor),
+    arcScale: Math.min(WSC.maxArcScale, 1.0 + (ls - 1.0) * WSC.arcFactor),
+    bodyCommitment: 1.0 + Math.min(ws - 1.0, WSC.bodyCommitmentWeightCap) * WSC.bodyCommitmentFactor,
+    gripCommitment: weapon.gripType === 'two-handed' ? WSC.twoHandedGripMul : 1.0,
+    durationScale: 1.0 + (ws - 1.0) * WSC.durationFactor,
   };
 }
 
-// ─── Attack Type Selection ───────────────────────────────
-
-interface AttackTypeWeight {
-  type: SwingType;
-  weight: number;
-}
-
-export function getPreferredAttackTypes(category?: string): AttackTypeWeight[] {
-  switch (category) {
-    case 'halberds':
-    case 'spears':
-      return [
-        { type: 'vertical', weight: 0.4 },
-        { type: 'thrust', weight: 0.45 },
-        { type: 'horizontal', weight: 0.15 },
-      ];
-    case 'greatswords':
-    case 'longswords':
-      return [
-        { type: 'horizontal', weight: 0.4 },
-        { type: 'vertical', weight: 0.4 },
-        { type: 'thrust', weight: 0.2 },
-      ];
-    case 'axes':
-    case 'hammers':
-    case 'maces':
-      return [
-        { type: 'vertical', weight: 0.6 },
-        { type: 'horizontal', weight: 0.3 },
-        { type: 'thrust', weight: 0.1 },
-      ];
-    case 'daggers':
-    case 'short_swords':
-      return [
-        { type: 'thrust', weight: 0.5 },
-        { type: 'horizontal', weight: 0.3 },
-        { type: 'vertical', weight: 0.2 },
-      ];
-    default:
-      return [
-        { type: 'vertical', weight: 0.34 },
-        { type: 'horizontal', weight: 0.33 },
-        { type: 'thrust', weight: 0.33 },
-      ];
-  }
-}
-
-export function pickWeightedAttackType(weights: AttackTypeWeight[]): SwingType {
-  const total = weights.reduce((s, w) => s + w.weight, 0);
-  let r = Math.random() * total;
-  for (const w of weights) {
-    r -= w.weight;
-    if (r <= 0) return w.type;
-  }
-  return weights[weights.length - 1].type;
-}
-
-/**
- * 標的の作成: 簡易ポスト型 (棒 + 頭部球)
- */
-export function createTarget(
-  scene: Scene, position: Vector3, prefix: string,
-): { root: TransformNode; meshes: import('@babylonjs/core').Mesh[] } {
-  const root = new TransformNode(`${prefix}_target`, scene);
-  root.position.copyFrom(position);
-
-  const mat = new StandardMaterial(`${prefix}_targetMat`, scene);
-  mat.diffuseColor = new Color3(0.7, 0.2, 0.2);
-
-  const body = MeshBuilder.CreateCylinder(`${prefix}_tBody`, {
-    height: 1.2, diameter: 0.25,
-  }, scene);
-  body.material = mat;
-  body.parent = root;
-  body.position.y = 0.6;
-
-  const head = MeshBuilder.CreateSphere(`${prefix}_tHead`, { diameter: 0.25 }, scene);
-  head.material = mat;
-  head.parent = root;
-  head.position.y = 1.35;
-
-  const base = MeshBuilder.CreateCylinder(`${prefix}_tBase`, {
-    height: 0.05, diameter: 0.4,
-  }, scene);
-  const baseMat = new StandardMaterial(`${prefix}_tBaseMat`, scene);
-  baseMat.diffuseColor = new Color3(0.4, 0.4, 0.4);
-  base.material = baseMat;
-  base.parent = root;
-  base.position.y = 0.025;
-
-  return { root, meshes: [body, head, base] };
-}
+// ─── SwingMotion 生成 ────────────────────────────────────
 
 /** BodyMotion の線形補間 */
 function lerpBody(a: BodyMotion, b: BodyMotion, t: number): BodyMotion {
@@ -157,6 +76,7 @@ export function createSwingMotion(
   const weapon = character.weapon;
   const swing = character.weaponSwing;
   const p = Math.max(0, Math.min(100, power)) / 100;
+
   const sf = getWeaponScaleFactors(weapon);
   const bc = sf.bodyCommitment;
   const gc = sf.gripCommitment;
@@ -179,14 +99,11 @@ export function createSwingMotion(
         .add(new Vector3(0, 0.1 * rs, 0))
         .add(charRight.scale(0.05));
       windupPos = Vector3.Lerp(startPos, fullWindup, p);
-
       const fullStrike = hipsPos
         .add(forward.scale(0.35 * rs))
         .add(new Vector3(0, -0.1 * rs, 0))
         .add(charRight.scale(0.05));
-      const minStrike = startPos
-        .add(forward.scale(0.1))
-        .add(new Vector3(0, -0.05, 0));
+      const minStrike = startPos.add(forward.scale(0.1)).add(new Vector3(0, -0.05, 0));
       strikePos = Vector3.Lerp(minStrike, fullStrike, p);
       break;
     }
@@ -196,14 +113,11 @@ export function createSwingMotion(
         .add(new Vector3(0, 0.15 * rs, 0))
         .add(forward.scale(-0.05 * rs));
       windupPos = Vector3.Lerp(startPos.add(charRight.scale(0.1 * rs)), fullWindup, p);
-
       const fullStrike = startPos
         .add(charRight.scale(-0.4 * rs))
         .add(forward.scale(0.2 * rs))
         .add(new Vector3(0, -0.05, 0));
-      const minStrike = startPos
-        .add(charRight.scale(-0.1))
-        .add(forward.scale(0.1));
+      const minStrike = startPos.add(charRight.scale(-0.1)).add(forward.scale(0.1));
       strikePos = Vector3.Lerp(minStrike, fullStrike, p);
       break;
     }
@@ -212,7 +126,6 @@ export function createSwingMotion(
         .add(forward.scale(-0.3 * rs))
         .add(new Vector3(0, 0.05, 0));
       windupPos = Vector3.Lerp(startPos.add(forward.scale(-0.05)), fullWindup, p);
-
       const toTarget = targetPos.subtract(startPos).normalize();
       const fullStrike = targetPos.subtract(toTarget.scale(weapon.length * 0.5));
       const minStrike = startPos.add(forward.scale(0.15));
@@ -221,48 +134,9 @@ export function createSwingMotion(
     }
   }
 
-  // ─── ボディモーション (武器重量・グリップで自動スケール) ───
-  let windupBody: BodyMotion;
-  let strikeBody: BodyMotion;
-
-  switch (type) {
-    case 'vertical':
-      windupBody = {
-        torsoLean: -0.15 * p * bc * gc, torsoTwist: 0.1 * p * bc * gc, hipsOffset: 0.02 * p * bc,
-        hipsForward: -0.03 * p * bc, footStepR: -0.05 * p * bc,
-        offHandOffset: new Vector3(-0.05 * p * bc, 0.1 * p * bc, -0.05 * p * bc),
-      };
-      strikeBody = {
-        torsoLean: 0.35 * p * bc * gc, torsoTwist: -0.05 * p * bc * gc, hipsOffset: -0.08 * p * bc,
-        hipsForward: 0.08 * p * bc, footStepR: 0.12 * p * bc,
-        offHandOffset: new Vector3(0.1 * p * bc, -0.1 * p * bc, 0.05 * p * bc),
-      };
-      break;
-    case 'horizontal':
-      windupBody = {
-        torsoLean: 0, torsoTwist: 0.35 * p * bc * gc, hipsOffset: 0,
-        hipsForward: -0.02 * p * bc, footStepR: 0.05 * p * bc,
-        offHandOffset: new Vector3(-0.1 * p * bc, 0.05 * p * bc, -0.08 * p * bc),
-      };
-      strikeBody = {
-        torsoLean: 0.1 * p * bc * gc, torsoTwist: -0.3 * p * bc * gc, hipsOffset: -0.03 * p * bc,
-        hipsForward: 0.05 * p * bc, footStepR: -0.03 * p * bc,
-        offHandOffset: new Vector3(0.15 * p * bc, -0.05 * p * bc, 0.1 * p * bc),
-      };
-      break;
-    case 'thrust':
-      windupBody = {
-        torsoLean: -0.1 * p * bc * gc, torsoTwist: 0.1 * p * bc * gc, hipsOffset: 0.02 * p * bc,
-        hipsForward: -0.08 * p * bc, footStepR: -0.08 * p * bc,
-        offHandOffset: new Vector3(-0.08 * p * bc, 0.05 * p * bc, -0.1 * p * bc),
-      };
-      strikeBody = {
-        torsoLean: 0.25 * p * bc * gc, torsoTwist: -0.05 * p * bc * gc, hipsOffset: -0.04 * p * bc,
-        hipsForward: 0.15 * p * bc, footStepR: 0.18 * p * bc,
-        offHandOffset: new Vector3(0.05 * p * bc, -0.08 * p * bc, 0),
-      };
-      break;
-  }
+  const preset = SWING_PRESETS[type];
+  const windupBody = scalePreset(preset.windup, p, bc, gc);
+  const strikeBody = scalePreset(preset.strike, p, bc, gc);
 
   const baseDuration = 0.4 + (1.0 - p) * 0.1;
   const duration = baseDuration * sf.durationScale;
@@ -278,6 +152,8 @@ export function createSwingMotion(
     rootPosAtStart: rootPos,
   };
 }
+
+// ─── SwingMotion 更新 ────────────────────────────────────
 
 /**
  * スイングモーション更新。毎フレーム呼び出し。
@@ -296,7 +172,6 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
   const wr = motion.windupRatio;
   const zero = neutralBody();
 
-  // 弧を描く攻撃 (horizontal)
   if (motion.arcSwing) {
     const arc = motion.arcSwing;
     const spineCenter = root.add(arc.centerOffset);
@@ -342,7 +217,6 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
     return { handTarget, body };
   }
 
-  // 通常の線形補間
   const start = root.add(motion.startOffset);
   const windup = root.add(motion.windupOffset);
   const strike = root.add(motion.strikeOffset);
@@ -364,6 +238,8 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
   }
 }
 
+// ─── BodyMotion 適用 ─────────────────────────────────────
+
 /**
  * ボディモーションをキャラクターに適用。
  */
@@ -373,7 +249,6 @@ export function applyBodyMotion(
   forward: Vector3,
   charRight: Vector3,
 ): void {
-  // ─── 胴体回転 (Spine1 = 'torso') ───
   const spineBone = character.allBones.get('mixamorig:Spine1');
   if (spineBone) {
     const baseRot = character.ikBaseRotations.get(spineBone.name);
@@ -384,7 +259,6 @@ export function applyBodyMotion(
     }
   }
 
-  // ─── 腰の移動 ───
   const hipsBone = character.allBones.get('mixamorig:Hips');
   if (hipsBone) {
     hipsBone.position.y = character.hipsBaseY + body.hipsOffset;
@@ -393,7 +267,6 @@ export function applyBodyMotion(
     character.root.position.addInPlace(forward.scale(body.hipsForward));
   }
 
-  // オフハンド(画面左手)の揺れ
   if (character.weapon && character.weapon.gripType === 'one-handed'
       && character.ikChains.rightArm.weight > 0) {
     const restPos = getOffHandRestPosition(character);

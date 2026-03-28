@@ -7,20 +7,22 @@ import {
   Quaternion,
 } from '@babylonjs/core';
 import {
-  initHavok, createHavokCharacter, updateHavokCharacter,
-  scaleBones, rebuildBodyMeshes,
+  createHavokCharacter, updateHavokCharacter,
+  scaleBones, rebuildBodyMeshes, startJump,
+} from '@/lib/havok-character/character';
+import {
   equipWeapon, unequipWeapon, updateWeaponInertia,
   startSwing, endSwing, releaseOffHand,
   fetchGameAssetWeapons, equipGameAssetWeapon,
-  getCharacterDirections, getStanceTargets,
   createTarget, createSwingMotion, updateSwingMotion, applyBodyMotion,
-  createCombatAI, updateCombatAI,
-  createTargetMover, updateTargetMover,
-  startJump,
-  type CombatAI, type TargetMover,
-  type HavokCharacter, type WeaponPhysics, type StanceType, type GameAssetWeaponInfo,
-  type SwingMotion, type SwingType,
-} from '@/lib/havok-character';
+} from '@/lib/havok-character/weapon';
+import { getCharacterDirections } from '@/lib/havok-character/character';
+import { getStanceTargets } from '@/lib/havok-character/weapon/stance';
+import { createCombatAI, updateCombatAI, createTargetMover, updateTargetMover } from '@/lib/havok-character/ai';
+import type {
+  CombatAI, TargetMover, HavokCharacter, WeaponPhysics, StanceType, GameAssetWeaponInfo,
+  SwingMotion, SwingType,
+} from '@/lib/havok-character/types';
 
 interface BoneEntry {
   name: string;
@@ -262,7 +264,6 @@ export default function HavokTestPage() {
         setStatus('Initializing...');
         // Clear caches from previous hot reloads
         _hipsBasePosCache = new Map();
-        await initHavok(scene);
         if (disposed) return;
 
         // Load bone data

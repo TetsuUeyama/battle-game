@@ -1,15 +1,33 @@
 /**
- * Havok Character System — Bezier attack trajectory computation.
+ * 防御的スイング — 相手の武器を回避するBezier軌道ベースの攻撃。
+ *
+ * 通常の attack-swing (直線的な振り) と異なり、
+ * 相手の武器位置を検知して迂回経由点を追加した曲線軌道で攻撃する。
+ *
+ * ■ 処理フロー
+ *   1. computeAttackPath(): 手→打撃目標ラインと相手武器の最短距離を計算
+ *      - 0.2m未満で「ブロックあり」→ 障害物位置に応じて迂回経由点を追加
+ *      - ブロックなし → スイングタイプに応じた自然なカーブ
+ *   2. createDefenceSwingMotion(): Bezier制御点からSwingMotionを生成
+ *      - body-config の SWING_PRESETS + 武器スケールで自動調整
+ *
+ * ■ 迂回ロジック (computeAttackPath)
+ *   障害物が打撃位置より上 → 下から回り込み (horizontal に変更)
+ *   障害物が打撃位置より下 → 上から回り込み (vertical に変更)
+ *   障害物が同じ高さ     → 横から回り込み (thrust に変更)
  */
 import { Scene, Vector3 } from '@babylonjs/core';
-import type { HavokCharacter, SwingMotion, SwingType, BodyMotion, BezierAttackPath } from './types';
-import { neutralBody } from './types';
-import { getWorldPos, getCharacterDirections } from './helpers';
-import { getWeaponTipWorld } from './weapon';
+import type { HavokCharacter, SwingMotion, SwingType, BezierAttackPath } from '../types';
+import { neutralBody } from '../types';
+import { getWorldPos } from '@/lib/math-utils';
+import { getCharacterDirections } from '../character/directions';
+import { getWeaponTipWorld } from './physics';
+import { getWeaponScaleFactors } from './attack-swing';
+import { SWING_PRESETS, scalePreset } from '../character/body';
 
-/**
- * De Casteljau アルゴリズムでN次Bezier曲線を評価。
- */
+// ─── Bezier曲線評価 ─────────────────────────────────────
+
+/** De Casteljau アルゴリズムでN次Bezier曲線を評価 */
 export function evaluateBezier(points: Vector3[], t: number): Vector3 {
   if (points.length === 1) return points[0].clone();
   const next: Vector3[] = [];
@@ -19,8 +37,11 @@ export function evaluateBezier(points: Vector3[], t: number): Vector3 {
   return evaluateBezier(next, t);
 }
 
+// ─── 攻撃軌道計算 ───────────────────────────────────────
+
 /**
  * 攻撃軌道をBezier曲線で計算。
+ * 相手の武器が軌道上にある場合、迂回経由点を追加して回避する。
  */
 export function computeAttackPath(
   scene: Scene,
@@ -36,12 +57,14 @@ export function computeAttackPath(
 
   const { forward, charRight } = dirs;
   const weapon = attacker.weapon;
+  const sf = getWeaponScaleFactors(weapon);
+  const rs = sf.reachScale;
 
   const handPos = attacker.weaponSwing.baseHandPos.clone();
-
   const toHit = hitPos.subtract(handPos).normalize();
   const handStrikePos = hitPos.subtract(toHit.scale(weapon.length * 0.6));
 
+  // ─── 障害物検知: 手→打撃位置ラインと相手武器の最短距離 ───
   let blocked = false;
   let blockPoint = Vector3.Zero();
 
@@ -59,41 +82,44 @@ export function computeAttackPath(
   let resolvedType = preferredType;
 
   if (blocked) {
+    // ─── ブロックあり: 障害物の位置に応じて迂回 ───
     const blockRelY = blockPoint.y - handStrikePos.y;
 
     if (blockRelY > 0.1) {
+      // 障害物が上 → 下から回り込み
       const waypoint = Vector3.Lerp(handPos, handStrikePos, 0.5)
-        .add(new Vector3(0, -0.3, 0))
-        .add(charRight.scale(0.2));
+        .add(new Vector3(0, -0.3 * rs, 0))
+        .add(charRight.scale(0.2 * rs));
       controlPoints = [handPos, waypoint, handStrikePos];
       resolvedType = 'horizontal';
     } else if (blockRelY < -0.1) {
+      // 障害物が下 → 上から回り込み
       const waypoint = Vector3.Lerp(handPos, handStrikePos, 0.5)
-        .add(new Vector3(0, 0.3, 0));
+        .add(new Vector3(0, 0.3 * rs, 0));
       controlPoints = [handPos, waypoint, handStrikePos];
       resolvedType = 'vertical';
     } else {
+      // 障害物が同じ高さ → 横から回り込み
       const waypoint = Vector3.Lerp(handPos, handStrikePos, 0.4)
-        .add(charRight.scale(0.3));
+        .add(charRight.scale(0.3 * rs));
       controlPoints = [handPos, waypoint, handStrikePos];
       resolvedType = 'thrust';
     }
   } else {
+    // ─── ブロックなし: スイングタイプに応じた自然なカーブ ───
     const headBone = attacker.combatBones.get('head');
     const headPos = headBone ? getWorldPos(headBone) : handPos.add(new Vector3(0, 0.3, 0));
-    const hipsBone = attacker.combatBones.get('hips');
-    const hipsPos = hipsBone ? getWorldPos(hipsBone) : handPos.add(new Vector3(0, -0.3, 0));
 
     let windupPos: Vector3;
     switch (preferredType) {
       case 'vertical':
-        windupPos = headPos.add(new Vector3(0, 0.15, 0)).add(forward.scale(-0.1)).add(charRight.scale(0.05));
+        windupPos = headPos.add(new Vector3(0, 0.15 * rs, 0)).add(forward.scale(-0.1 * rs)).add(charRight.scale(0.05));
         break;
       case 'horizontal':
-        windupPos = handPos.add(charRight.scale(0.4)).add(new Vector3(0, 0.1, 0));
+        windupPos = handPos.add(charRight.scale(0.4 * rs)).add(new Vector3(0, 0.1 * rs, 0));
         break;
-      default: // thrust
-        windupPos = handPos.add(forward.scale(-0.2));
+      default:
+        windupPos = handPos.add(forward.scale(-0.2 * rs));
         break;
     }
     controlPoints = [handPos, windupPos, handStrikePos];
@@ -101,6 +127,8 @@ export function computeAttackPath(
 
   return { controlPoints, resolvedSwingType: resolvedType };
 }
+
+// ─── 線分間距離 ─────────────────────────────────────────
 
 /** 2本の線分間の最短距離 */
 function distanceLineToLine(
@@ -134,10 +162,13 @@ function distanceLineToLine(
   return Vector3.Distance(closest1, closest2);
 }
 
+// ─── 防御的SwingMotion生成 ───────────────────────────────
+
 /**
  * Bezier軌道ベースのSwingMotionを作成。
+ * body-config の SWING_PRESETS + 武器スケールで自動調整される。
  */
-export function createBezierSwingMotion(
+export function createDefenceSwingMotion(
   character: HavokCharacter,
   path: BezierAttackPath,
   power: number = 100,
@@ -151,49 +182,28 @@ export function createBezierSwingMotion(
       startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero() };
   }
 
+  const sf = getWeaponScaleFactors(weapon);
+  const bc = sf.bodyCommitment;
+  const gc = sf.gripCommitment;
+
   const cp = path.controlPoints;
   const startPos = cp[0].clone();
   const windupPos = cp.length > 2 ? evaluateBezier(cp, 0.35) : Vector3.Lerp(cp[0], cp[cp.length - 1], 0.35);
   const strikePos = cp[cp.length - 1].clone();
 
   const baseDuration = 0.4 + (1.0 - p) * 0.1;
-  const weightFactor = 1.0 + (weapon.weight - 1.0) * 0.08;
 
+  // SWING_PRESETS + scalePreset で自動スケール
   const type = path.resolvedSwingType;
-  let windupBody: BodyMotion, strikeBody: BodyMotion;
-
-  switch (type) {
-    case 'vertical':
-      windupBody = { torsoLean: -0.15 * p, torsoTwist: 0.1 * p, hipsOffset: 0.02 * p,
-        hipsForward: -0.03 * p, footStepR: -0.05 * p,
-        offHandOffset: new Vector3(-0.05 * p, 0.1 * p, -0.05 * p) };
-      strikeBody = { torsoLean: 0.35 * p, torsoTwist: -0.05 * p, hipsOffset: -0.08 * p,
-        hipsForward: 0.08 * p, footStepR: 0.12 * p,
-        offHandOffset: new Vector3(0.1 * p, -0.1 * p, 0.05 * p) };
-      break;
-    case 'horizontal':
-      windupBody = { torsoLean: 0, torsoTwist: 0.35 * p, hipsOffset: 0,
-        hipsForward: -0.02 * p, footStepR: 0.05 * p,
-        offHandOffset: new Vector3(-0.1 * p, 0.05 * p, -0.08 * p) };
-      strikeBody = { torsoLean: 0.1 * p, torsoTwist: -0.3 * p, hipsOffset: -0.03 * p,
-        hipsForward: 0.05 * p, footStepR: -0.03 * p,
-        offHandOffset: new Vector3(0.15 * p, -0.05 * p, 0.1 * p) };
-      break;
-    default: // thrust
-      windupBody = { torsoLean: -0.1 * p, torsoTwist: 0.1 * p, hipsOffset: 0.02 * p,
-        hipsForward: -0.08 * p, footStepR: -0.08 * p,
-        offHandOffset: new Vector3(-0.08 * p, 0.05 * p, -0.1 * p) };
-      strikeBody = { torsoLean: 0.25 * p, torsoTwist: -0.05 * p, hipsOffset: -0.04 * p,
-        hipsForward: 0.15 * p, footStepR: 0.18 * p,
-        offHandOffset: new Vector3(0.05 * p, -0.08 * p, 0) };
-      break;
-  }
+  const preset = SWING_PRESETS[type];
+  const windupBody = scalePreset(preset.windup, p, bc, gc);
+  const strikeBody = scalePreset(preset.strike, p, bc, gc);
 
   const rootPos = character.root.position.clone();
   return {
     type,
     progress: 0,
-    duration: baseDuration * weightFactor,
+    duration: baseDuration * sf.durationScale,
     windupRatio: 0.35 + p * 0.1,
     startPos, windupPos, strikePos,
     active: true,
