@@ -4,7 +4,6 @@
  */
 import type { StateContext, StateResult } from '../types';
 import { updateStance } from '../weapon/stance';
-import { resetSpine } from '../character/reset';
 import { endSwing, startSwing } from '../weapon';
 import { swingAttack, createSwingMotion } from '../actions/swing-attack';
 
@@ -33,7 +32,7 @@ export function handleAttack(ctx: StateContext): StateResult {
       ai.recoverTimer = ai.recoverTime;
       ai.currentMotion = null;
       ai.comboRemaining = 0;
-      resetSpine(character);
+      // Spine/Hipsリセットは updateHavokCharacter の毎フレーム gradual reset が担当
     }
   }
 

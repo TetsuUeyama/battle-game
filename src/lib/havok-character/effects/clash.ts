@@ -4,7 +4,8 @@
  */
 import { Vector3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter, CombatAI, ClashState } from '../types';
-import { getWeaponTipWorld } from '../weapon';
+import { getWeaponTipWorld, endSwing } from '../weapon';
+import { applyWorldDeltaRotation } from '@/lib/math-utils';
 
 /**
  * 武器同士の衝突を検知し、反作用を適用。
@@ -82,16 +83,18 @@ export function updateClashReaction(
   if (spineBone) {
     const baseRot = character.ikBaseRotations.get(spineBone.name);
     if (baseRot) {
+      spineBone.rotationQuaternion = baseRot.root.clone();
       const wobbleRot = Quaternion.RotationAxis(
         Vector3.Forward(),
         Math.sin(clashWobbleT * 1.3) * clash.wobbleIntensity * 0.1,
       );
-      spineBone.rotationQuaternion = wobbleRot.multiply(baseRot.root);
+      applyWorldDeltaRotation(spineBone, wobbleRot, 1.0);
     }
   }
 
   if (ai.state === 'attack' || ai.state === 'close_in') {
     if (ai.currentMotion) ai.currentMotion.active = false;
+    endSwing(character);
     ai.state = 'recover';
     ai.recoverTimer = clash.timer + 0.3;
   }

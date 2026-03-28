@@ -9,6 +9,7 @@ import {
   createHavokCharacter, updateHavokCharacter,
   teleportCharacter, resolveCharacterCollision, clampToFieldBounds,
 } from '@/lib/havok-character/character';
+import { resetSpineImmediate } from '@/lib/havok-character/character/reset';
 import {
   fetchGameAssetWeapons, equipGameAssetWeapon,
 } from '@/lib/havok-character/weapon';
@@ -106,18 +107,8 @@ export default function WeaponCombatV2Page() {
       char.ikChains.leftArm.weight = 0;
       char.ikChains.rightArm.weight = 0;
 
-      // Spine回転をT-poseにリセット
-      for (const sn of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2']) {
-        const bone = char.allBones.get(sn);
-        if (bone) {
-          const br = char.ikBaseRotations.get(bone.name);
-          if (br) bone.rotationQuaternion = br.root.clone();
-        }
-      }
-
-      // Hips位置リセット
-      const hips = char.allBones.get('mixamorig:Hips');
-      if (hips) hips.position.y = char.hipsBaseY;
+      // Spine + Hips を即座にリセット
+      resetSpineImmediate(char);
 
       // ジャンプ状態リセット
       char.jumpState.active = false;

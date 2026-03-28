@@ -16,7 +16,7 @@
 import { Vector3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter, SwingMotion, SwingFrame, BodyMotion, SwingType, WeaponPhysics } from '../types';
 import { neutralBody } from '../types';
-import { getWorldPos } from '@/lib/math-utils';
+import { getWorldPos, applyWorldDeltaRotation } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
 import { getOffHandRestPosition } from './stance';
 import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset, JOINT_CONFIG } from '../character/body';
@@ -333,8 +333,9 @@ export function applyBodyMotion(
 
   // torsoLean/torsoTwist を -1〜+1 の「使用率」として解釈し、
   // 各Spineの可動域制限の端まで回転させる。
-  // lean>0 → 前傾 (X軸 max方向), lean<0 → 後傾 (X軸 min方向)
-  // twist>0 → 右ひねり (Y軸 max方向), twist<0 → 左ひねり (Y軸 min方向)
+  // lean>0 → 前傾, lean<0 → 後傾
+  // twist>0 → 右ひねり, twist<0 → 左ひねり
+  // ※ Babylon.js左手座標系: RotationAxis(charRight, 正) = 後傾 なので lean の符号を反転して渡す
   const leanNorm = Math.max(-1, Math.min(1, body.torsoLean * fm * 3.0));  // radを正規化 (0.35rad≒1.0)
   const twistNorm = Math.max(-1, Math.min(1, body.torsoTwist * fm * 1.5));
 
@@ -352,7 +353,9 @@ export function applyBodyMotion(
 
     const ikBase = character.ikBaseRotations.get(bone.name);
     if (!ikBase) continue;
-    const baseQ = ikBase.root;
+
+    // まず基準回転にリセット
+    bone.rotationQuaternion = ikBase.root.clone();
 
     // X軸: leanNorm の符号に応じて min or max まで回転
     const xDeg = leanNorm >= 0
@@ -364,10 +367,12 @@ export function applyBodyMotion(
       ? twistNorm * limits.y.max
       : -twistNorm * limits.y.min;
 
-    // charRight軸の正回転が後傾になるため符号反転
-    const leanQuat = Quaternion.RotationAxis(charRight, -xDeg * toRad);
-    const twistQuat = Quaternion.RotationAxis(Vector3.Up(), yDeg * toRad);
-    bone.rotationQuaternion = twistQuat.multiply(leanQuat).multiply(baseQ);
+    // ワールド空間のデルタ回転を作成し、親の回転を考慮してローカルに変換
+    const leanWorld = Quaternion.RotationAxis(charRight, xDeg * toRad);
+    const twistWorld = Quaternion.RotationAxis(Vector3.Up(), yDeg * toRad);
+    const deltaWorld = twistWorld.multiply(leanWorld);
+
+    applyWorldDeltaRotation(bone, deltaWorld, 1.0);
   }
 
   // 腰

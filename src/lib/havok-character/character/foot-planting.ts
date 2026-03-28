@@ -8,9 +8,10 @@ import type {
   IKChain, HavokCharacter, FootStep, FootStepper, DebugVisuals, BoneDataFile, CombatAI,
 } from '../types';
 import { COM_WEIGHTS } from '../types';
-import { getWorldPos } from '@/lib/math-utils';
+import { getWorldPos, applyWorldDeltaRotation } from '@/lib/math-utils';
 import { getCharacterDirections } from './directions';
 import { getOffHandRestPosition } from '../weapon/stance';
+import { endSwing } from '../weapon';
 import { BALANCE_CONFIG } from './body';
 
 // ─── Center of Mass ──────────────────────────────────────
@@ -225,6 +226,7 @@ export function updateBalance(
     // AIの攻撃を強制中断
     if (ai && (ai.state === 'attack' || ai.state === 'close_in')) {
       if (ai.currentMotion) ai.currentMotion.active = false;
+      endSwing(character);
       ai.state = 'recover';
       ai.recoverTimer = bal.staggerTimer + 0.2;
     }
@@ -240,11 +242,12 @@ export function updateBalance(
     if (spineBone) {
       const baseRot = character.ikBaseRotations.get(spineBone.name);
       if (baseRot) {
+        spineBone.rotationQuaternion = baseRot.root.clone();
         const wobbleRot = Quaternion.RotationAxis(
           Vector3.Forward(),
           Math.sin(t * 12) * bal.staggerIntensity * 0.08,
         );
-        spineBone.rotationQuaternion = wobbleRot.multiply(baseRot.root);
+        applyWorldDeltaRotation(spineBone, wobbleRot, 1.0);
       }
     }
 

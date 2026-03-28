@@ -268,9 +268,11 @@ export function clampArmRotation(character: HavokCharacter): void {
 }
 
 /**
- * Spine1/Spine2 のXYZ 3軸回転を制限する。
+ * Spine/Spine1/Spine2 のXYZ 3軸回転を制限する。
+ * スイング中はスキップ (applyBodyMotionが直接Spineを制御するため)。
  */
 export function clampSpineRotation(character: HavokCharacter): void {
+  if (character.weaponSwing.swinging) return;
   const s0 = JOINT_CONFIG.spine;
   clampBone3Axis(character, 'mixamorig:Spine', s0.x, s0.y, s0.z);
 

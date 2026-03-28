@@ -194,10 +194,7 @@ export function initScene(
           if (dirs) applyBodyMotion(char, frame.body, dirs.forward, dirs.charRight);
         }
         if (!_currentMotion.active) {
-          for (const sn of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2']) {
-            const sb = char.allBones.get(sn);
-            if (sb) { const br = char.ikBaseRotations.get(sb.name); if (br) sb.rotationQuaternion = br.root.clone(); }
-          }
+          // Spine リセットは updateHavokCharacter の gradual reset が毎フレーム担当
           _currentMotion = null;
         }
       } else {

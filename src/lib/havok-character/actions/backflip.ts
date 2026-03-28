@@ -8,6 +8,7 @@
 import { Vector3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter } from '../types';
 import { getCharacterDirections } from '../character/directions';
+import { applyWorldDeltaRotation } from '@/lib/math-utils';
 
 export type BackflipPhase = 'none' | 'crouch' | 'airborne' | 'landing';
 
@@ -155,8 +156,9 @@ export function updateBackflip(character: HavokCharacter, bf: BackflipState, dt:
       if (spineBone) {
         const baseRot = character.ikBaseRotations.get(spineBone.name);
         if (baseRot) {
+          spineBone.rotationQuaternion = baseRot.root.clone();
           const tuckQuat = Quaternion.RotationAxis(bf.rotAxis.scale(-1), tuckAmount * 0.25);
-          spineBone.rotationQuaternion = tuckQuat.multiply(baseRot.root);
+          applyWorldDeltaRotation(spineBone, tuckQuat, 1.0);
         }
       }
 
@@ -227,7 +229,9 @@ function applyArmPose(character: HavokCharacter, fwd: number, up: number): void 
 
     const fwdRot = Quaternion.RotationAxis(fwdAxis, fwd);
     const upRot = Quaternion.RotationAxis(upAxis, up);
-    bone.rotationQuaternion = upRot.multiply(fwdRot).multiply(baseRot.root);
+    const deltaWorld = upRot.multiply(fwdRot);
+    bone.rotationQuaternion = baseRot.root.clone();
+    applyWorldDeltaRotation(bone, deltaWorld, 1.0);
   }
 
   // 前腕も少し追従
@@ -241,8 +245,9 @@ function applyArmPose(character: HavokCharacter, fwd: number, up: number): void 
     if (!dirs) continue;
     const isLeft = forearmName.includes('Left');
     const axis = dirs.charRight.scale(isLeft ? 1 : -1);
-    const bendRot = Quaternion.RotationAxis(axis, fwd * 0.5 + Math.max(0, up) * 0.3);
-    bone.rotationQuaternion = bendRot.multiply(baseRot.root);
+    const bendDelta = Quaternion.RotationAxis(axis, fwd * 0.5 + Math.max(0, up) * 0.3);
+    bone.rotationQuaternion = baseRot.root.clone();
+    applyWorldDeltaRotation(bone, bendDelta, 1.0);
   }
 }
 

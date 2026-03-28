@@ -37,6 +37,9 @@ export { PHYSICS_CONFIG } from './physics';
 
 export { TURN_CONFIG } from './turn';
 
+export { BONE_ANGULAR_SPEED, PART_LINEAR_SPEED } from './motion-speed';
+export type { PartSpeedConfig, LinearSpeedConfig } from './motion-speed';
+
 export { AI_PARAMS } from './ai-params';
 
 export { FORCE_CHAINS, FORCE_CHAIN_PARAMS, CHAIN_RIGHT_ATTACK, CHAIN_LEFT_ATTACK } from './force-chain';

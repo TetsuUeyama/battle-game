@@ -15,6 +15,8 @@ import { updateWeaponPower } from '../weapon';
 import { updateJump } from '../actions/jump';
 import { resolveBodySelfCollision } from './body-collision';
 import { maintainJointReadiness } from './joint-readiness';
+import { resetSpine as resetSpineGradual } from './reset';
+import { enforceMotionRateLimit } from './motion-rate-limit';
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
   const deltaTime = dt ?? (1 / 60);
@@ -67,6 +69,11 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   keepFootHorizontal(chains.leftLeg.end, character.footBaseWorldRot.left);
   keepFootHorizontal(chains.rightLeg.end, character.footBaseWorldRot.right);
 
+  // スイング中でなければ体幹を徐々にT-poseに戻す (重心も復帰)
+  if (!character.weaponSwing.swinging) {
+    resetSpineGradual(character);
+  }
+
   updateWeaponPower(character, dt ?? (1 / 60));
 
   if (character.weapon && character.ikChains.rightArm.weight > 0) {
@@ -85,6 +92,9 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
       }
     }
   }
+
+  // 全モーション適用後: ボーン回転・位置のレート制限
+  enforceMotionRateLimit(character, deltaTime);
 
   const com = calculateCenterOfMass(character.combatBones);
   const lFoot = getWorldPos(character.combatBones.get('leftFoot')!);

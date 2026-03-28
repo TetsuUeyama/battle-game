@@ -41,7 +41,7 @@ export { scaleBones } from './scale';
 export { teleportCharacter, resolveCharacterCollision, clampToFieldBounds } from './movement';
 
 // Reset
-export { resetSpine } from './reset';
+export { resetSpine, resetSpineImmediate } from './reset';
 
 // Body self-collision
 export { resolveBodySelfCollision } from './body-collision';

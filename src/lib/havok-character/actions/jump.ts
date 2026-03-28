@@ -12,6 +12,7 @@
 import { Vector3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter } from '../types';
 import { getCharacterDirections } from '../character/directions';
+import { applyWorldDeltaRotation } from '@/lib/math-utils';
 
 const CROUCH_DURATION = 0.18;
 const LANDING_DURATION = 0.22;
@@ -189,7 +190,9 @@ function applyJumpArmPose(character: HavokCharacter, heightRatio: number, ascend
     const upAxis = dirs.forward.scale(isLeft ? -1 : 1);
     const fwdRot = Quaternion.RotationAxis(fwdAxis, armFwd);
     const upRot = Quaternion.RotationAxis(upAxis, armUp);
-    bone.rotationQuaternion = upRot.multiply(fwdRot).multiply(baseRot.root);
+    const deltaWorld = upRot.multiply(fwdRot);
+    bone.rotationQuaternion = baseRot.root.clone();
+    applyWorldDeltaRotation(bone, deltaWorld, 1.0);
   }
 
   for (const name of ['mixamorig:LeftForeArm', 'mixamorig:RightForeArm']) {
@@ -200,7 +203,8 @@ function applyJumpArmPose(character: HavokCharacter, heightRatio: number, ascend
     const isLeft = name.includes('Left');
     const axis = dirs.charRight.scale(isLeft ? 1 : -1);
     const bend = Math.max(0, armUp) * 0.4;
-    bone.rotationQuaternion = Quaternion.RotationAxis(axis, bend).multiply(baseRot.root);
+    bone.rotationQuaternion = baseRot.root.clone();
+    applyWorldDeltaRotation(bone, Quaternion.RotationAxis(axis, bend), 1.0);
   }
 }
 

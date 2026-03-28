@@ -247,6 +247,12 @@ export interface HavokCharacter {
   weaponSwing: WeaponSwingState;
   /** 武器メッシュ (デバッグ用ボックス) */
   weaponMesh: Mesh | null;
+  /** 現在のBodyMotion状態 (レート制限用) */
+  currentBodyMotion: BodyMotion;
+  /** 前フレームのボーン回転 (レート制限用) */
+  prevBoneRotations: Map<string, Quaternion>;
+  /** 前フレームのボーン位置Y (レート制限用) */
+  prevBonePosY: Map<string, number>;
   /** Debug */
   debug: DebugVisuals;
 }

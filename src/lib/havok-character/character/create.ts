@@ -10,7 +10,7 @@ import { PhysicsBody, PhysicsMotionType, PhysicsShapeCapsule } from '@babylonjs/
 import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
 import type { HavokCharacter, BoneDataFile, FootStep, CreateCharacterOptions } from '../types';
 import {
-  createJumpState, createBalanceState, createWeaponSwingState,
+  createJumpState, createBalanceState, createWeaponSwingState, neutralBody,
   BODY_PARTS, COMBAT_BONE_MAP, BONE_DATA_URL,
 } from '../types';
 import { eulerDegreesToQuat } from '@/lib/math-utils';
@@ -215,6 +215,9 @@ export async function createHavokCharacter(
     hipsBaseY: 0,
     footBaseWorldRot: { left: Quaternion.Identity(), right: Quaternion.Identity() },
     weapon: null, weaponSwing: createWeaponSwingState(), weaponMesh: null,
+    currentBodyMotion: neutralBody(),
+    prevBoneRotations: new Map(),
+    prevBonePosY: new Map(),
   };
 
   for (const chain of [ikChains.leftLeg, ikChains.rightLeg, ikChains.leftArm, ikChains.rightArm]) {

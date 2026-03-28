@@ -28,17 +28,16 @@ export interface SwingPreset {
 
 export const SWING_PRESETS: Record<string, SwingPreset> = {
   // ─── 標的練習用 (createSwingMotion) ───
-  // 縦振り: 振りかぶり=後傾(lean-), 打撃=前傾(lean+)
+  // lean-=後傾(振りかぶり), lean+=前傾(振り下ろし)
+  // twist-=左ひねり, twist+=右ひねり
   vertical: {
     windup: { torsoLean: -0.5, torsoTwist: 0.05, hipsOffset: 0.02, hipsForward: -0.05, footStepR: -0.05, offHand: [-0.05, 0.1, -0.05] },
     strike: { torsoLean: 0.6, torsoTwist: -0.05, hipsOffset: -0.08, hipsForward: 0.1, footStepR: 0.12, offHand: [0.1, -0.1, 0.05] },
   },
-  // 横振り: 振りかぶり=左ひねり(twist-) → 打撃=右ひねり(twist+)
   horizontal: {
     windup: { torsoLean: 0, torsoTwist: -0.7, hipsOffset: 0, hipsForward: -0.02, footStepR: 0.05, offHand: [-0.1, 0.05, -0.08] },
     strike: { torsoLean: 0.1, torsoTwist: 0.7, hipsOffset: -0.03, hipsForward: 0.05, footStepR: -0.03, offHand: [0.15, -0.05, 0.1] },
   },
-  // 突き: 振りかぶり=後傾+少し左ひねり, 打撃=前傾+踏み込み
   thrust: {
     windup: { torsoLean: -0.3, torsoTwist: -0.1, hipsOffset: 0.02, hipsForward: -0.1, footStepR: -0.08, offHand: [-0.08, 0.05, -0.1] },
     strike: { torsoLean: 0.4, torsoTwist: 0.05, hipsOffset: -0.04, hipsForward: 0.2, footStepR: 0.18, offHand: [0.05, -0.08, 0] },
