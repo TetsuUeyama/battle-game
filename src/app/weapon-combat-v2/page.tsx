@@ -16,6 +16,9 @@ import {
   createCombatAIvsCharacter, updateCombatAIvsCharacter,
 } from '@/lib/havok-character/ai';
 import {
+  createKnockoutState, startKnockout, updateKnockout, type KnockoutState,
+} from '@/lib/havok-character/actions/knockout';
+import {
   checkWeaponClash, updateClashReaction,
   emitHitBlood, emitClashSpark,
   PRESET_COMBAT_BLOOD, PRESET_COMBAT_SPARK,
@@ -87,6 +90,10 @@ export default function WeaponCombatV2Page() {
     let char1: HavokCharacter | null = null;
     let char2: HavokCharacter | null = null;
     let matchEnded = false;
+    let knockoutTimer = 0;
+    const KNOCKOUT_DURATION = 3.0;
+    let ko1: KnockoutState = createKnockoutState();
+    let ko2: KnockoutState = createKnockoutState();
 
     const eventLog: string[] = [];
     function addEvent(msg: string) {
@@ -155,6 +162,9 @@ export default function WeaponCombatV2Page() {
 
             f1Hp = 100; f2Hp = 100;
             matchEnded = false;
+            knockoutTimer = 0;
+            ko1 = createKnockoutState();
+            ko2 = createKnockoutState();
             setMatchResult(null);
 
             setF1(prev => ({ ...prev, hp: 100, weaponName: `${w1Info.category}/${w1Info.pieceKey}` }));
@@ -183,7 +193,40 @@ export default function WeaponCombatV2Page() {
       const dt = Math.min((now - prevTime) / 1000, 0.1);
       prevTime = now;
 
-      if (!char1 || !char2 || !ai1 || !ai2 || matchEnded) {
+      if (!char1 || !char2 || !ai1 || !ai2) {
+        scene.render();
+        return;
+      }
+
+      // KO後: 倒れモーション + パーティクル継続
+      if (matchEnded) {
+        knockoutTimer += dt;
+
+        // KOモーション更新 (倒れ途中のキャラのみ)
+        updateKnockout(char1, ko1, dt);
+        updateKnockout(char2, ko2, dt);
+
+        // パーティクル・衝突反動は継続
+        bloodFx.update(dt);
+        sparkFx.update(dt);
+        updateClashReaction(char1, clash1, ai1, dt);
+        updateClashReaction(char2, clash2, ai2, dt);
+
+        // 勝者のみ IK・ステッピングを継続 (敗者は updateHavokCharacter が position.y を上書きするので呼ばない)
+        if (f1Hp > 0) {
+          clampToFieldBounds(char1, 4.5);
+          updateHavokCharacter(scene, char1, dt);
+        }
+        if (f2Hp > 0) {
+          clampToFieldBounds(char2, 4.5);
+          updateHavokCharacter(scene, char2, dt);
+        }
+
+        if (knockoutTimer >= KNOCKOUT_DURATION) {
+          scene.render();
+          return;
+        }
+
         scene.render();
         return;
       }
@@ -214,16 +257,14 @@ export default function WeaponCombatV2Page() {
       }
 
       // 武器衝突反動の更新
-      if (ai1 && ai2) {
-        updateClashReaction(char1, clash1, ai1, dt);
-        updateClashReaction(char2, clash2, ai2, dt);
-      }
+      updateClashReaction(char1, clash1, ai1, dt);
+      updateClashReaction(char2, clash2, ai2, dt);
 
       // パーティクル更新
       bloodFx.update(dt);
       sparkFx.update(dt);
 
-      // バランスシステム更新 (重心監視 + よろめき + オフハンド自動補正)
+      // バランスシステム更新
       updateBalance(char1, ai1, dt);
       updateBalance(char2, ai2, dt);
 
@@ -239,11 +280,20 @@ export default function WeaponCombatV2Page() {
       // 勝敗判定
       if (f1Hp <= 0 || f2Hp <= 0) {
         matchEnded = true;
+        knockoutTimer = 0;
         ai1.enabled = false;
         ai2.enabled = false;
         const winner = f1Hp > 0 ? 'Fighter 1 (Blue)' : 'Fighter 2 (Red)';
         setMatchResult(`${winner} Wins!`);
         addEvent(`${winner} wins!`);
+
+        // 敗者の倒れモーション開始
+        if (f1Hp <= 0) {
+          startKnockout(char1, ko1, char2.root.position);
+        }
+        if (f2Hp <= 0) {
+          startKnockout(char2, ko2, char1.root.position);
+        }
       }
 
       // HUD更新 (200msごと)

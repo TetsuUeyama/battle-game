@@ -108,9 +108,15 @@ export interface IKChain {
 
 // ─── Jump System ─────────────────────────────────────────
 
+export type JumpPhase = 'none' | 'crouch' | 'airborne' | 'landing';
+
 export interface JumpState {
   /** ジャンプ中か */
   active: boolean;
+  /** 現在のフェーズ */
+  phase: JumpPhase;
+  /** フェーズ内タイマー (秒) */
+  phaseTimer: number;
   /** 垂直速度 (m/s) */
   velocityY: number;
   /** 現在の高さオフセット (m) */
@@ -119,15 +125,23 @@ export interface JumpState {
   gravity: number;
   /** ジャンプ初速 (m/s) */
   jumpVelocity: number;
+  /** 水平慣性速度 (world space, m/s) — 走り中のジャンプで引き継ぐ */
+  horizontalVelocity: Vector3;
+  /** 溜め量 (0-1): 溜め時間に比例して跳躍力が変わる */
+  crouchPower: number;
 }
 
 export function createJumpState(): JumpState {
   return {
     active: false,
+    phase: 'none' as JumpPhase,
+    phaseTimer: 0,
     velocityY: 0,
     heightOffset: 0,
     gravity: 9.8,
     jumpVelocity: 4.0,
+    horizontalVelocity: Vector3.Zero(),
+    crouchPower: 0,
   };
 }
 

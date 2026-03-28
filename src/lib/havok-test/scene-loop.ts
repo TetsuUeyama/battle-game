@@ -19,7 +19,7 @@ import { createCombatAI, updateCombatAI } from '@/lib/havok-character/ai';
 import { buildBoneHierarchy } from './bone-visualizer';
 import { ensureBasePos, clearHipsBaseCache, SELECTABLE_BONES } from './constants';
 import { computeJointAngles } from './joint-monitor';
-import { updateMotionTest } from './motion-test';
+import { updateMotionTest, isBackflipPlaying } from './motion-test';
 import type { BoneDataFile } from './bone-visualizer';
 
 export interface SceneCallbacks {
@@ -205,9 +205,11 @@ export function initScene(
       }
     }
 
-    // IK + HUD
-    if (char) {
+    // IK + HUD (バク転中はupdateHavokCharacterをスキップ — position.yやIKが上書きされるのを防ぐ)
+    if (char && !isBackflipPlaying()) {
       updateHavokCharacter(scene, char, dt);
+    }
+    if (char) {
       if (char.weapon) cbs.setTipSpeed(char.weaponSwing.tipSpeed); cbs.setSwingPower(char.weaponSwing.power);
       if (_combatAI) cbs.setAiState(_combatAI.state);
       _jointHudTimer += dt;

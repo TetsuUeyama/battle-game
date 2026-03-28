@@ -3,7 +3,8 @@ import type { HavokCharacter, SwingType } from '@/lib/havok-character/types';
 import type { HavokTestState, HavokTestActions } from '../use-havok-state';
 import { JOINT_CONFIG } from '@/lib/havok-character/character/body';
 import { SWING_PRESETS } from '@/lib/havok-character/character/body';
-import { playMotionTest } from '../motion-test';
+import { playMotionTest, getBackflipStateRef } from '../motion-test';
+import { startBackflip } from '@/lib/havok-character/actions/backflip';
 import { sectionStyle, btnStyle, headingStyle, selectStyle, labelStyle, sliderStyle } from './styles';
 
 interface Props {
@@ -60,6 +61,18 @@ export function DebugPanel({ state: s, actions: a, characterRef, onJump }: Props
           {s.motionTestPlaying ? 'Playing...' : `Play ${s.motionTestType}`}
         </button>
         <PresetTable type={s.motionTestType} />
+
+        {/* Backflip */}
+        <button
+          onClick={() => {
+            const c = characterRef.current;
+            if (!c) return;
+            startBackflip(c, getBackflipStateRef());
+            a.setMotionTestPlaying(true);
+          }}
+          style={{ ...btnStyle('#a0f'), marginTop: 8 }}>
+          Backflip
+        </button>
       </div>
 
       {/* Joint Angles */}
