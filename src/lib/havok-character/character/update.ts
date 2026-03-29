@@ -76,18 +76,18 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
 
   updateWeaponPower(character, dt ?? (1 / 60));
 
-  if (character.weapon && character.ikChains.rightArm.weight > 0) {
+  if (character.weapon && character.ikChains.leftArm.weight > 0) {
     if (character.weapon.gripType === 'two-handed') {
       character.weaponAttachR.computeWorldMatrix(true);
       const offLocal = character.weapon.offHandOffset;
       const offWorld = Vector3.TransformCoordinates(offLocal, character.weaponAttachR.getWorldMatrix());
-      const offShoulderPos = getWorldPos(character.ikChains.rightArm.root);
+      const offShoulderPos = getWorldPos(character.ikChains.leftArm.root);
       const dir = offWorld.subtract(offShoulderPos).normalize();
-      character.ikChains.rightArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
+      character.ikChains.leftArm.target.copyFrom(offWorld.subtract(dir.scale(PALM_OFFSET)));
     } else {
       const restPos = getOffHandRestPosition(character);
       if (restPos) {
-        const current = character.ikChains.rightArm.target;
+        const current = character.ikChains.leftArm.target;
         Vector3.LerpToRef(current, restPos, Math.min(1, 8 * deltaTime), current);
       }
     }

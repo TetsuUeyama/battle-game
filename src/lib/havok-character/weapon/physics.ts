@@ -26,7 +26,7 @@ export function updateWeaponInertia(
 ): void {
   const weapon = character.weapon;
   if (!weapon) {
-    character.ikChains.leftArm.target.copyFrom(desiredTarget);
+    character.ikChains.rightArm.target.copyFrom(desiredTarget);
     return;
   }
 
@@ -36,7 +36,7 @@ export function updateWeaponInertia(
   const t = Math.min(1.0, lerpSpeed * dt);
 
   Vector3.LerpToRef(swing.smoothedTarget, desiredTarget, t, swing.smoothedTarget);
-  character.ikChains.leftArm.target.copyFrom(swing.smoothedTarget);
+  character.ikChains.rightArm.target.copyFrom(swing.smoothedTarget);
 }
 
 /**
@@ -81,18 +81,18 @@ export function endSwing(character: HavokCharacter): number {
 }
 
 /**
- * 両手持ち武器で画面左手(off-hand)を切替。
+ * 両手持ち武器でオフハンド(左手)を切替。
  */
 export function releaseOffHand(character: HavokCharacter, release: boolean): void {
   const weapon = character.weapon;
   if (!weapon || weapon.gripType !== 'two-handed') return;
 
   if (release) {
-    character.ikChains.rightArm.weight = 0;
+    character.ikChains.leftArm.weight = 0;
   } else {
-    character.ikChains.rightArm.weight = 1;
+    character.ikChains.leftArm.weight = 1;
     const tipWorld = getWeaponTipWorld(character);
     const handWorld = getWorldPos(character.weaponAttachR);
-    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.rightArm.target);
+    Vector3.LerpToRef(handWorld, tipWorld, 0.3, character.ikChains.leftArm.target);
   }
 }

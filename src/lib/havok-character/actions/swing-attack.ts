@@ -33,7 +33,7 @@ export function swingAttack(
   if (ai.currentMotion && ai.currentMotion.active) {
     const frame = updateSwingMotion(ai.currentMotion, dt, character.root.position);
     if (frame) {
-      character.ikChains.leftArm.target.copyFrom(frame.handTarget);
+      character.ikChains.rightArm.target.copyFrom(frame.handTarget);
       character.weaponSwing.smoothedTarget.copyFrom(frame.handTarget);
       if (dirs) {
         applyBodyMotion(character, frame.body, dirs.forward, dirs.charRight);

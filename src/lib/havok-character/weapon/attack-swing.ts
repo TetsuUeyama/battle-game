@@ -94,7 +94,7 @@ export function createSwingMotion(
 
   const dirs = getCharacterDirections(character);
   if (!dirs || !character.weapon) {
-    return { type, progress: 0, duration: 0.6, windupRatio: 0.4, startPos: Vector3.Zero(), windupPos: Vector3.Zero(), strikePos: Vector3.Zero(), active: false, power: 0, windupBody: neutralBody(), strikeBody: neutralBody(), startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero() };
+    return { type, progress: 0, duration: 0.6, windupRatio: 0.4, startPos: Vector3.Zero(), windupPos: Vector3.Zero(), strikePos: Vector3.Zero(), active: false, power: 0, windupBody: neutralBody(), strikeBody: neutralBody(), startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero(), stepInDistance: 0, stepInDir: Vector3.Zero() };
   }
 
   const { forward, charRight } = dirs;
@@ -107,7 +107,9 @@ export function createSwingMotion(
   const gc = sf.gripCommitment;
   const rs = sf.reachScale;
 
-  const startPos = swing.baseHandPos.clone();
+  // 握り手の位置 (weaponAttachRのワールド位置)
+  character.weaponAttachR.computeWorldMatrix(true);
+  const startPos = character.weaponAttachR.getAbsolutePosition().clone();
 
   // ─── 打撃目標位置の決定 ───
   let hitPos: Vector3;
@@ -124,79 +126,176 @@ export function createSwingMotion(
   }
 
   const dir = opts.dir ?? forward;
-  const handStrikePos = hitPos.subtract(dir.scale(weapon.length * 0.6));
 
-  // ─── 振りかぶり位置 ───
-  const headBone = character.combatBones.get('head');
-  const headPos = headBone ? getWorldPos(headBone) : startPos.add(new Vector3(0, 0.4, 0));
-  const hipsBone = character.combatBones.get('hips');
-  const hipsPos = hipsBone ? getWorldPos(hipsBone) : startPos.add(new Vector3(0, -0.3, 0));
+  // ─── 肩位置・腕リーチ ───
+  const armLen = character.ikChains.rightArm.lengthA + character.ikChains.rightArm.lengthB;
+  const shoulderBone = character.ikChains.rightArm.root;
+  shoulderBone.computeWorldMatrix(true);
+  const shoulderWorldPos = shoulderBone.getAbsolutePosition();
+  const armReach = armLen * 0.95;
+
+  // ─── 自分のボーン位置 ───
+  const myHeadBone = character.combatBones.get('head');
+  const myHipsBone = character.combatBones.get('hips');
+  const myHeadPos = myHeadBone ? getWorldPos(myHeadBone) : shoulderWorldPos.add(new Vector3(0, 0.3, 0));
+  const myHipsPos = myHipsBone ? getWorldPos(myHipsBone) : shoulderWorldPos.add(new Vector3(0, -0.4, 0));
+
+  // ─── 相手の通過ポイント (武器先端が通るべき2点) ───
+  let tipPass1: Vector3; // 武器先端の通過点1 (振りかぶり側)
+  let tipPass2: Vector3; // 武器先端の通過点2 (振り終わり側)
+
+  if (opts.opponent) {
+    const oppHead = opts.opponent.combatBones.get('head');
+    const oppTorso = opts.opponent.combatBones.get('torso');
+    const oppHips = opts.opponent.combatBones.get('hips');
+    const oppHeadPos = oppHead ? getWorldPos(oppHead) : hitPos.add(new Vector3(0, 0.4, 0));
+    const oppTorsoPos = oppTorso ? getWorldPos(oppTorso) : hitPos;
+    const oppHipsPos = oppHips ? getWorldPos(oppHips) : hitPos.add(new Vector3(0, -0.3, 0));
+
+    switch (type) {
+      case 'vertical':
+        tipPass1 = oppHeadPos.add(new Vector3(0, 0.3, 0));
+        tipPass2 = oppHipsPos;
+        break;
+      case 'horizontal':
+      case 'horizontal_r2l':
+        tipPass1 = oppTorsoPos.add(charRight.scale(0.4));
+        tipPass2 = oppTorsoPos.add(charRight.scale(-0.4));
+        break;
+      case 'horizontal_l2r':
+        tipPass1 = oppTorsoPos.add(charRight.scale(-0.4));
+        tipPass2 = oppTorsoPos.add(charRight.scale(0.4));
+        break;
+      case 'thrust':
+      default:
+        tipPass1 = oppTorsoPos.add(dir.scale(-0.5));
+        tipPass2 = oppTorsoPos;
+        break;
+    }
+  } else {
+    switch (type) {
+      case 'vertical':
+        tipPass1 = hitPos.add(new Vector3(0, 0.5, 0));
+        tipPass2 = hitPos.add(new Vector3(0, -0.3, 0));
+        break;
+      case 'horizontal':
+      case 'horizontal_r2l':
+        tipPass1 = hitPos.add(charRight.scale(0.4));
+        tipPass2 = hitPos.add(charRight.scale(-0.4));
+        break;
+      case 'horizontal_l2r':
+        tipPass1 = hitPos.add(charRight.scale(-0.4));
+        tipPass2 = hitPos.add(charRight.scale(0.4));
+        break;
+      case 'thrust':
+      default:
+        tipPass1 = hitPos.add(forward.scale(-0.5));
+        tipPass2 = hitPos;
+        break;
+    }
+  }
+
+  // ─── 手のIKターゲット位置の算出 ───
+  // ルール:
+  //   縦振り: 振りかぶり = 手が自分の頭の高さ、振り終わり = 手が自分の腰の高さ
+  //   横R2L: 振りかぶり = 手が自分の右半身側、振り終わり = 手が左半身側
+  //   横L2R: 振りかぶり = 手が自分の左半身側、振り終わり = 手が右半身側
+  //   突き:  振りかぶり = 手を後方に引く、振り終わり = 目標方向に突き出す
+  // 全て: 肩からarmReach分離して腕をまっすぐにする
 
   let windupPos: Vector3;
   let strikePos: Vector3;
 
+  // 武器先端が通過点を通るための握り手の位置を計算する関数
+  // 握り手位置 = 通過点から肩方向にweapon.length分戻す
+  // かつ肩からarmReach距離を保証 (腕まっすぐ)
+  function gripPosForTip(tipTarget: Vector3): Vector3 {
+    const tipToShoulder = shoulderWorldPos.subtract(tipTarget).normalize();
+    const grip = tipTarget.add(tipToShoulder.scale(weapon.length));
+    // 肩からarmReach距離に補正
+    const gripDir = grip.subtract(shoulderWorldPos).normalize();
+    return shoulderWorldPos.add(gripDir.scale(armReach));
+  }
+
   switch (type) {
     case 'vertical': {
-      const fullWindup = headPos
-        .add(forward.scale(-0.2 * rs))
-        .add(new Vector3(0, 0.1 * rs, 0))
-        .add(charRight.scale(0.05));
-      windupPos = Vector3.Lerp(startPos, fullWindup, p);
-      if (opts.opponent) {
-        // character モード: opponent ボーン基準の打撃位置
-        strikePos = handStrikePos;
-      } else {
-        // target モード: 自分基準の振り下ろし
-        const fullStrike = hipsPos.add(forward.scale(0.35 * rs)).add(new Vector3(0, -0.1 * rs, 0)).add(charRight.scale(0.05));
-        const minStrike = startPos.add(forward.scale(0.1)).add(new Vector3(0, -0.05, 0));
-        strikePos = Vector3.Lerp(minStrike, fullStrike, p);
-      }
+      // 振りかぶり: 握り手が自分の頭の高さ
+      // 先端通過点1(相手頭上)から逆算した握り手をベースに、Y座標を頭の高さにする
+      const baseWindup = gripPosForTip(tipPass1);
+      baseWindup.y = myHeadPos.y;
+      const wDir = baseWindup.subtract(shoulderWorldPos).normalize();
+      windupPos = shoulderWorldPos.add(wDir.scale(armReach));
+
+      // 振り終わり: 握り手が自分の腰の高さ
+      const baseStrike = gripPosForTip(tipPass2);
+      baseStrike.y = myHipsPos.y;
+      const sDir = baseStrike.subtract(shoulderWorldPos).normalize();
+      strikePos = shoulderWorldPos.add(sDir.scale(armReach));
       break;
     }
-    case 'horizontal': {
-      const fullWindup = startPos
-        .add(charRight.scale(0.5 * rs))
-        .add(new Vector3(0, 0.15 * rs, 0))
-        .add(forward.scale(-0.05 * rs));
-      windupPos = Vector3.Lerp(startPos.add(charRight.scale(0.1 * rs)), fullWindup, p);
-      if (opts.opponent) {
-        strikePos = handStrikePos;
-      } else {
-        const fullStrike = startPos.add(charRight.scale(-0.4 * rs)).add(forward.scale(0.2 * rs)).add(new Vector3(0, -0.05, 0));
-        const minStrike = startPos.add(charRight.scale(-0.1)).add(forward.scale(0.1));
-        strikePos = Vector3.Lerp(minStrike, fullStrike, p);
-      }
+    case 'horizontal':
+    case 'horizontal_r2l': {
+      // 振りかぶり: 握り手が自分の右半身側
+      const baseWindup = gripPosForTip(tipPass1);
+      // 握り手を右半身に寄せる
+      const wRight = shoulderWorldPos.add(charRight.scale(armReach * 0.7)).add(forward.scale(armReach * 0.3));
+      wRight.y = shoulderWorldPos.y;
+      const wrDir = wRight.subtract(shoulderWorldPos).normalize();
+      windupPos = shoulderWorldPos.add(wrDir.scale(armReach));
+
+      // 振り終わり: 握り手が自分の左半身側
+      const wLeft = shoulderWorldPos.add(charRight.scale(-armReach * 0.5)).add(forward.scale(armReach * 0.4));
+      wLeft.y = shoulderWorldPos.y;
+      const slDir = wLeft.subtract(shoulderWorldPos).normalize();
+      strikePos = shoulderWorldPos.add(slDir.scale(armReach));
       break;
     }
-    case 'thrust': {
-      const fullWindup = startPos
-        .add(forward.scale(-0.3 * rs))
-        .add(new Vector3(0, 0.05, 0));
-      windupPos = Vector3.Lerp(startPos.add(forward.scale(-0.05)), fullWindup, p);
-      if (opts.opponent) {
-        strikePos = handStrikePos;
-      } else {
-        const toTarget = hitPos.subtract(startPos).normalize();
-        const fullStrike = hitPos.subtract(toTarget.scale(weapon.length * 0.5));
-        const minStrike = startPos.add(forward.scale(0.15));
-        strikePos = Vector3.Lerp(minStrike, fullStrike, p);
-      }
+    case 'horizontal_l2r': {
+      // 振りかぶり: 握り手が自分の左半身側
+      const wLeft = shoulderWorldPos.add(charRight.scale(-armReach * 0.5)).add(forward.scale(armReach * 0.3));
+      wLeft.y = shoulderWorldPos.y;
+      const wlDir = wLeft.subtract(shoulderWorldPos).normalize();
+      windupPos = shoulderWorldPos.add(wlDir.scale(armReach));
+
+      // 振り終わり: 握り手が自分の右半身側
+      const wRight = shoulderWorldPos.add(charRight.scale(armReach * 0.7)).add(forward.scale(armReach * 0.4));
+      wRight.y = shoulderWorldPos.y;
+      const srDir = wRight.subtract(shoulderWorldPos).normalize();
+      strikePos = shoulderWorldPos.add(srDir.scale(armReach));
+      break;
+    }
+    case 'thrust':
+    default: {
+      // 振りかぶり: 後方に引く
+      const backDir = forward.scale(-0.8).add(new Vector3(0, 0.1, 0)).normalize();
+      windupPos = shoulderWorldPos.add(backDir.scale(armReach * 0.7));
+
+      // 振り終わり: 先端が通過点2に届くように握り手を配置
+      strikePos = gripPosForTip(tipPass2);
       break;
     }
   }
 
-  // ─── ボディモーション ───
-  const presetKey = opts.useVsPreset ? `${type}_vs` : type;
-  const preset = SWING_PRESETS[presetKey] ?? SWING_PRESETS[type];
-  const windupBody = scalePreset(preset.windup, p, bc, gc);
-  const strikeBody = scalePreset(preset.strike, p, bc, gc);
+  // ─── ボディモーション (無効化: Spine類の動きは使わない) ───
+  const windupBody = neutralBody();
+  const strikeBody = neutralBody();
+
+  // ─── 踏み込み距離の算出 ───
+  // 武器先端が通過点2に届くために必要な距離
+  const rootPos = character.root.position.clone();
+  const totalReach = armReach + weapon.length * 0.9;
+  const distToTip2 = Vector3.Distance(shoulderWorldPos, tipPass2);
+  const stepInDistance = Math.max(0, distToTip2 - totalReach);
+  const stepInDir = dir.clone();
+  stepInDir.y = 0;
+  if (stepInDir.length() > 0.001) stepInDir.normalize();
+  else stepInDir.copyFrom(forward);
 
   // ─── 時間 ───
   const baseDuration = opts.isComboFollow
     ? (0.35 + (1.0 - p) * 0.08) * sf.durationScale
     : (0.4 + (1.0 - p) * 0.1) * sf.durationScale;
 
-  const rootPos = character.root.position.clone();
   const motion: SwingMotion = {
     type, progress: 0, duration: baseDuration,
     windupRatio: opts.isComboFollow ? 0.3 + p * 0.1 : 0.35 + p * 0.1,
@@ -206,20 +305,14 @@ export function createSwingMotion(
     windupOffset: windupPos.subtract(rootPos),
     strikeOffset: strikePos.subtract(rootPos),
     rootPosAtStart: rootPos,
+    stepInDistance,
+    stepInDir,
+    worldStrikePos: strikePos.clone(),
+    worldWindupPos: windupPos.clone(),
   };
 
-  // 横振り: 弧を描く
-  if (type === 'horizontal') {
-    const spineBone = character.combatBones.get('torso');
-    const spinePos = spineBone ? getWorldPos(spineBone) : rootPos.add(new Vector3(0, 1.2, 0));
-    const spineOffset = spinePos.subtract(rootPos);
-    const armLen = character.ikChains.leftArm.lengthA + character.ikChains.leftArm.lengthB;
-    const maxAngle = Math.min(Math.PI * 0.6, (Math.PI * 0.39) * p * sf.arcScale);
-    motion.arcSwing = {
-      centerOffset: spineOffset, radius: armLen,
-      windupAngle: maxAngle, strikeAngle: -maxAngle, height: spineOffset.y,
-    };
-  }
+  // 横振り: 弧を描く (arcSwingは使わず、worldWindupPos/worldStrikePosの直線補間で十分)
+  // arcSwingを無効化し、ワールド座標ベースのwindup→strike補間に統一
 
   return motion;
 }
@@ -238,7 +331,24 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
     motion.active = false;
   }
 
-  const root = currentRootPos ?? motion.rootPosAtStart;
+  // ── 踏み込み: 打撃フェーズ中にルート位置を前方へ移動 ──
+  let root = currentRootPos ?? motion.rootPosAtStart;
+  if (motion.stepInDistance > 0.001 && currentRootPos) {
+    const p = motion.progress;
+    const wr = motion.windupRatio;
+    if (p >= wr) {
+      // 打撃フェーズ中のみ踏み込み
+      const strikeT = (p - wr) / (1.0 - wr);
+      // 前半70%で踏み込み完了、ease-out で減速
+      const stepT = Math.min(1, strikeT / 0.7);
+      const eased = 1 - (1 - stepT) * (1 - stepT);
+      const stepSpeed = motion.stepInDistance / (motion.duration * (1 - wr) * 0.7);
+      const frameDist = stepSpeed * dt * (1 - stepT + 0.1); // 減速
+      currentRootPos.addInPlace(motion.stepInDir.scale(frameDist));
+    }
+    root = currentRootPos;
+  }
+
   const p = motion.progress;
   const wr = motion.windupRatio;
   const zero = neutralBody();
@@ -289,8 +399,8 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
   }
 
   const start = root.add(motion.startOffset);
-  const windup = root.add(motion.windupOffset);
-  const strike = root.add(motion.strikeOffset);
+  const windup = motion.worldWindupPos ?? root.add(motion.windupOffset);
+  const strike = motion.worldStrikePos ?? root.add(motion.strikeOffset);
 
   if (p < wr) {
     const t = p / wr;
@@ -384,15 +494,15 @@ export function applyBodyMotion(
     character.root.position.addInPlace(forward.scale(body.hipsForward * fm));
   }
 
-  // オフハンド
+  // オフハンド (左手)
   if (character.weapon && character.weapon.gripType === 'one-handed'
-      && character.ikChains.rightArm.weight > 0) {
+      && character.ikChains.leftArm.weight > 0) {
     const restPos = getOffHandRestPosition(character);
     if (restPos) {
       const offset = forward.scale(body.offHandOffset.x * fm)
         .add(Vector3.Up().scale(body.offHandOffset.y * fm))
         .add(charRight.scale(body.offHandOffset.z * fm));
-      character.ikChains.rightArm.target.copyFrom(restPos.add(offset));
+      character.ikChains.leftArm.target.copyFrom(restPos.add(offset));
     }
   }
 }

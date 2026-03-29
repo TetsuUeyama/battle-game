@@ -45,21 +45,29 @@ export function getBalanceDeviation(com: Vector3, leftFoot: Vector3, rightFoot: 
  * Initialize foot plant targets from current T-pose foot positions.
  * Called once after character creation. Targets are fixed to ground.
  */
-export function initFootPlanting(character: HavokCharacter, boneData: BoneDataFile): void {
+export function initFootPlanting(character: HavokCharacter, boneData: { bones: { name: string; worldPosition: { x: number; y: number; z: number } | [number, number, number] }[] }): void {
   const chains = character.ikChains;
   const fp = character.footPlant;
 
-  // Use bone-data.json worldPosition directly (reliable, no runtime matrix issues)
+  // worldPosition は MotionConverter 変換済み (メートル、Babylon.js左手系)
   const rootOffset = character.root.position;
   const lFootEntry = boneData.bones.find(b => b.name === 'mixamorig:LeftFoot');
   const rFootEntry = boneData.bones.find(b => b.name === 'mixamorig:RightFoot');
 
-  const lFootY = lFootEntry ? lFootEntry.worldPosition[1] : 0.10;
-  const rFootY = rFootEntry ? rFootEntry.worldPosition[1] : 0.10;
-  const lFootX = lFootEntry ? lFootEntry.worldPosition[0] + rootOffset.x : rootOffset.x;
-  const lFootZ = lFootEntry ? lFootEntry.worldPosition[2] + rootOffset.z : rootOffset.z;
-  const rFootX = rFootEntry ? rFootEntry.worldPosition[0] + rootOffset.x : rootOffset.x;
-  const rFootZ = rFootEntry ? rFootEntry.worldPosition[2] + rootOffset.z : rootOffset.z;
+  const getWP = (entry: typeof lFootEntry) => {
+    if (!entry) return { x: 0, y: 0.10, z: 0 };
+    const wp = entry.worldPosition;
+    return Array.isArray(wp) ? { x: wp[0], y: wp[1], z: wp[2] } : wp;
+  };
+  const lFoot = getWP(lFootEntry);
+  const rFoot = getWP(rFootEntry);
+
+  const lFootY = lFoot.y;
+  const rFootY = rFoot.y;
+  const lFootX = lFoot.x + rootOffset.x;
+  const lFootZ = lFoot.z + rootOffset.z;
+  const rFootX = rFoot.x + rootOffset.x;
+  const rFootZ = rFoot.z + rootOffset.z;
 
   character.initialFootY = { left: lFootY, right: rFootY };
 
@@ -103,10 +111,10 @@ export function updateFootStepping(character: HavokCharacter, dt: number): void 
   const groundY = character.initialFootY.left;
 
   // 各足の理想位置: 腰の真下 ± スタンス幅
-  // Mixamo Left = 画面右足, Mixamo Right = 画面左足
-  const idealL = hipsPos.add(charRight.scale(stepper.stanceHalfWidth));
+  // 変換済み: Left = 画面左、Right = 画面右
+  const idealL = hipsPos.add(charRight.scale(-stepper.stanceHalfWidth));
   idealL.y = groundY;
-  const idealR = hipsPos.add(charRight.scale(-stepper.stanceHalfWidth));
+  const idealR = hipsPos.add(charRight.scale(stepper.stanceHalfWidth));
   idealR.y = groundY;
 
   // 各足の水平距離 (Y無視)
@@ -120,7 +128,7 @@ export function updateFootStepping(character: HavokCharacter, dt: number): void 
   // ステップ発動: 片足ずつ、より遠い方を優先
   if (!stepper.left.stepping && !stepper.right.stepping) {
     if (distL > stepper.stepThreshold && distL >= distR) {
-      // 画面右足 (Mixamo Left) をステップ
+      // 左足をステップ
       stepper.left.stepping = true;
       stepper.left.progress = 0;
       stepper.left.liftPos = stepper.left.planted.clone();
@@ -129,7 +137,7 @@ export function updateFootStepping(character: HavokCharacter, dt: number): void 
       stepper.left.target = idealL.add(overshoot);
       stepper.left.target.y = groundY;
     } else if (distR > stepper.stepThreshold) {
-      // 画面左足 (Mixamo Right) をステップ
+      // 右足をステップ
       stepper.right.stepping = true;
       stepper.right.progress = 0;
       stepper.right.liftPos = stepper.right.planted.clone();
@@ -266,7 +274,7 @@ export function updateBalance(
   // ─── オフハンド自動バランス補正 ───
   // 重心がずれている方向の逆にオフハンドを移動 → 重心を実際に補正
   if (character.weapon && character.weapon.gripType === 'one-handed'
-      && character.ikChains.rightArm.weight > 0 && bal.deviation > BALANCE_CONFIG.offHandCorrectionThreshold) {
+      && character.ikChains.leftArm.weight > 0 && bal.deviation > BALANCE_CONFIG.offHandCorrectionThreshold) {
     const footCenter = lFoot.add(rFoot).scale(0.5);
     const comOffset = com.subtract(footCenter);
     comOffset.y = 0;
@@ -278,7 +286,7 @@ export function updateBalance(
       const counterAmount = Math.min(0.3, bal.deviation * 2);
       const balancedPos = restPos.add(counterDir.scale(counterAmount)).add(new Vector3(0, counterAmount * 0.5, 0));
 
-      const current = character.ikChains.rightArm.target;
+      const current = character.ikChains.leftArm.target;
       Vector3.LerpToRef(current, balancedPos, Math.min(1, 6 * dt), current);
 
       // オフハンドの補正効果: 左手が動いた分だけ重心逸脱を軽減

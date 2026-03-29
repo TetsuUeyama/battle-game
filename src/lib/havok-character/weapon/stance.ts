@@ -11,7 +11,7 @@ import { getCharacterDirections } from '../character/directions';
 const PALM = PALM_OFFSET;
 
 /**
- * 片手武器時のオフハンド(画面左手)の自然な休息位置。
+ * 片手武器時のオフハンド(左手)の自然な休息位置。
  */
 export function getOffHandRestPosition(character: HavokCharacter): Vector3 | null {
   const dirs = getCharacterDirections(character);
@@ -67,7 +67,7 @@ export function getStanceTargets(
     }
   }
 
-  const weaponShoulderPos = getWorldPos(character.ikChains.leftArm.root);
+  const weaponShoulderPos = getWorldPos(character.ikChains.rightArm.root);
   const shoulderToGrip = gripPos.subtract(weaponShoulderPos).normalize();
   const rightTarget = gripPos.subtract(shoulderToGrip.scale(PALM));
 
@@ -75,7 +75,7 @@ export function getStanceTargets(
   if (weapon.gripType === 'two-handed') {
     const pommelDir = weaponDir.scale(-1);
     const offHandWorld = gripPos.add(pommelDir.scale(weapon.offHandOffset.y));
-    const offHandShoulderPos = getWorldPos(character.ikChains.rightArm.root);
+    const offHandShoulderPos = getWorldPos(character.ikChains.leftArm.root);
     const offShoulderToOff = offHandWorld.subtract(offHandShoulderPos).normalize();
     leftTarget = offHandWorld.subtract(offShoulderToOff.scale(PALM));
   }

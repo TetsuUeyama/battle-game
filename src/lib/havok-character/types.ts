@@ -188,9 +188,8 @@ export interface FootStep {
 
 /** 両足のステッピングシステム */
 export interface FootStepper {
-  // Mixamo Left = 画面右足, Mixamo Right = 画面左足
-  left: FootStep;   // Mixamo LeftFoot (画面右足)
-  right: FootStep;  // Mixamo RightFoot (画面左足)
+  left: FootStep;   // LeftFoot (左足)
+  right: FootStep;  // RightFoot (右足)
   /** ステップ発動距離 (m) */
   stepThreshold: number;
   /** ステップ時の足の持ち上げ高さ (m) */
@@ -349,7 +348,7 @@ export interface CreateCharacterOptions {
 
 // ─── Swing Motion Types ──────────────────────────────────
 
-export type SwingType = 'vertical' | 'horizontal' | 'thrust';
+export type SwingType = 'vertical' | 'horizontal' | 'horizontal_r2l' | 'horizontal_l2r' | 'thrust';
 
 /** 胴体・下半身のモーションデータ */
 export interface BodyMotion {
@@ -363,7 +362,7 @@ export interface BodyMotion {
   hipsForward: number;
   /** 右足(画面右)の前方踏み出し (m) */
   footStepR: number;
-  /** オフハンド(画面左手)のオフセット [forward, up, right] (m) */
+  /** オフハンド(左手)のオフセット [forward, up, right] (m) */
   offHandOffset: Vector3;
 }
 
@@ -388,6 +387,14 @@ export interface SwingMotion {
   strikeOffset: Vector3;
   /** モーション開始時のキャラroot位置 */
   rootPosAtStart: Vector3;
+  /** 踏み込み距離 (m)。打撃フェーズ中にこの距離だけ前方に移動する */
+  stepInDistance: number;
+  /** 踏み込み方向 (正規化済み) */
+  stepInDir: Vector3;
+  /** ワールド空間の打撃目標位置 */
+  worldStrikePos?: Vector3;
+  /** ワールド空間の振りかぶり位置 */
+  worldWindupPos?: Vector3;
   /** 弧を描く攻撃 (horizontal用) */
   arcSwing?: {
     /** 弧の中心 (root相対) = 肩位置 */
@@ -518,12 +525,12 @@ export const PALM_OFFSET = 0.064;
 
 /** 手のひらグリップポイント (hand bone local space) */
 export const PALM_GRIP_POINTS = {
-  // tip側 (人差し指根元付近)
-  right_upper: new Vector3(0.028, 0.100, 0.025),
+  // tip側 (人差し指根元付近) — Babylon.js左手系のボーンローカル空間
+  right_upper: new Vector3(0.028, 0.100, -0.025),
   // pommel側 (薬指根元付近)
-  right_lower: new Vector3(-0.022, 0.098, 0.025),
-  left_upper: new Vector3(-0.028, 0.100, 0.025),
-  left_lower: new Vector3(0.022, 0.098, 0.025),
+  right_lower: new Vector3(-0.022, 0.098, -0.025),
+  left_upper: new Vector3(-0.028, 0.100, -0.025),
+  left_lower: new Vector3(0.022, 0.098, -0.025),
 };
 
 export const COM_WEIGHTS: Record<string, number> = {

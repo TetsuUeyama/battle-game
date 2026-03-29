@@ -53,9 +53,9 @@ export function startGuard(character: HavokCharacter, guard: GuardState): void {
     .add(dirs.forward.scale(0.15))
     .add(new Vector3(0, 0.05, 0));
 
-  // 画面右手 (Mixamo leftArm) を防御位置に
-  character.ikChains.leftArm.target.copyFrom(guard.guardPos);
-  character.ikChains.leftArm.weight = 1;
+  // 右手を防御位置に
+  character.ikChains.rightArm.target.copyFrom(guard.guardPos);
+  character.ikChains.rightArm.weight = 1;
 }
 
 /**

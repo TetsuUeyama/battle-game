@@ -8,14 +8,17 @@ import {
 } from '@babylonjs/core';
 import { PhysicsBody, PhysicsMotionType, PhysicsShapeCapsule } from '@babylonjs/core/Physics/v2';
 import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin';
-import type { HavokCharacter, BoneDataFile, FootStep, CreateCharacterOptions } from '../types';
+import type { HavokCharacter, FootStep, CreateCharacterOptions } from '../types';
 import {
   createJumpState, createBalanceState, createWeaponSwingState, neutralBody,
   BODY_PARTS, COMBAT_BONE_MAP, BONE_DATA_URL,
 } from '../types';
-import { eulerDegreesToQuat } from '@/lib/math-utils';
 import { createIKChains, initFootPlanting, createDebugVisuals } from './index';
 import { FOOT_PLANT_CONFIG, PHYSICS_CONFIG } from './body';
+import {
+  convertBoneData,
+  type RawBoneData, type ConvertedBoneData,
+} from '@/lib/motion-converter';
 
 // ─── Havok 物理エンジン初期化 (自動・1回のみ) ───────────
 
@@ -32,17 +35,17 @@ async function ensureHavok(scene: Scene): Promise<HavokPlugin> {
 
 // ─── Skeleton Builder ────────────────────────────────────
 
-async function loadBoneData(): Promise<BoneDataFile> {
+async function loadBoneData(): Promise<ConvertedBoneData> {
   const res = await fetch(BONE_DATA_URL);
   if (!res.ok) throw new Error(`Failed to load bone-data: ${res.status}`);
-  return res.json();
+  const raw: RawBoneData = await res.json();
+  return convertBoneData(raw, 'mixamo');
 }
 
 function buildSkeleton(
-  scene: Scene, boneData: BoneDataFile, root: TransformNode, prefix: string,
+  scene: Scene, boneData: ConvertedBoneData, root: TransformNode, prefix: string,
 ): Map<string, TransformNode> {
   const allBones = new Map<string, TransformNode>();
-  const scale = boneData.globalSettings.unitScaleFactor / 100;
 
   for (const entry of boneData.bones) {
     const node = new TransformNode(`${prefix}_${entry.name}`, scene);
@@ -52,14 +55,12 @@ function buildSkeleton(
     } else {
       node.parent = root;
     }
-    node.position.set(
-      entry.localPosition[0] * scale,
-      entry.localPosition[1] * scale,
-      entry.localPosition[2] * scale,
+    // MotionConverter変換済み: メートル単位、Babylon.js左手系
+    node.position.set(entry.localPosition.x, entry.localPosition.y, entry.localPosition.z);
+    node.rotationQuaternion = new Quaternion(
+      entry.localRotation.x, entry.localRotation.y,
+      entry.localRotation.z, entry.localRotation.w,
     );
-    const pre = eulerDegreesToQuat(entry.preRotation[0], entry.preRotation[1], entry.preRotation[2]);
-    const lcl = eulerDegreesToQuat(entry.localRotation[0], entry.localRotation[1], entry.localRotation[2]);
-    node.rotationQuaternion = pre.multiply(lcl);
     allBones.set(entry.name, node);
   }
   return allBones;
@@ -169,11 +170,11 @@ export async function createHavokCharacter(
   const bodyMeshes = createBodyMeshes(scene, allBones, bodyColor, prefix);
 
   const weaponAttachR = new TransformNode(`${prefix}_weaponR`, scene);
-  const visualRightHand = combatBones.get('leftHand');
-  if (visualRightHand) { weaponAttachR.parent = visualRightHand; weaponAttachR.position.set(0, 0.064, 0.035); }
+  const rightHand = combatBones.get('rightHand');
+  if (rightHand) { weaponAttachR.parent = rightHand; weaponAttachR.position.set(0, 0.064, 0.035); }
   const weaponAttachL = new TransformNode(`${prefix}_weaponL`, scene);
-  const visualLeftHand = combatBones.get('rightHand');
-  if (visualLeftHand) { weaponAttachL.parent = visualLeftHand; weaponAttachL.position.set(0, 0.064, 0.035); }
+  const leftHand = combatBones.get('leftHand');
+  if (leftHand) { weaponAttachL.parent = leftHand; weaponAttachL.position.set(0, 0.064, 0.035); }
 
   const palmMarkerMat = new StandardMaterial(`${prefix}_palmMarkerMat`, scene);
   palmMarkerMat.diffuseColor = new Color3(1, 0.2, 0.8);
@@ -249,7 +250,7 @@ export async function createHavokCharacter(
     character.footBaseWorldRot.right = Quaternion.FromRotationMatrix(rFootBone.getWorldMatrix().getRotationMatrix()).clone();
   }
 
-  initFootPlanting(character, boneData);
+  initFootPlanting(character, boneData as any);
   return character;
 }
 

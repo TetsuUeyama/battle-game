@@ -85,17 +85,17 @@ export function applyStance(character: HavokCharacter, stance: StanceType): void
   swing.baseHandPos = rightTarget.clone();
   swing.smoothedTarget = rightTarget.clone();
 
-  character.ikChains.leftArm.target.copyFrom(rightTarget);
-  character.ikChains.leftArm.weight = 1;
+  character.ikChains.rightArm.target.copyFrom(rightTarget);
+  character.ikChains.rightArm.weight = 1;
 
   if (weapon.gripType === 'two-handed' && leftTarget) {
-    character.ikChains.rightArm.target.copyFrom(leftTarget);
-    character.ikChains.rightArm.weight = 1;
+    character.ikChains.leftArm.target.copyFrom(leftTarget);
+    character.ikChains.leftArm.weight = 1;
   } else {
     const offHandPos = getOffHandRestPosition(character);
     if (offHandPos) {
-      character.ikChains.rightArm.target.copyFrom(offHandPos);
-      character.ikChains.rightArm.weight = 1;
+      character.ikChains.leftArm.target.copyFrom(offHandPos);
+      character.ikChains.leftArm.weight = 1;
     }
   }
 
@@ -133,8 +133,8 @@ function setWeaponDirection(character: HavokCharacter, weaponDir: Vector3): void
   const tempQ = rot1.multiply(new Quaternion(rotatedGripAxis.x, rotatedGripAxis.y, rotatedGripAxis.z, 0)).multiply(rot1Conj);
   const rotatedGrip = new Vector3(tempQ.x, tempQ.y, tempQ.z).normalize();
 
-  const palmUpper = PALM_GRIP_POINTS.left_upper;
-  const palmLower = PALM_GRIP_POINTS.left_lower;
+  const palmUpper = PALM_GRIP_POINTS.right_upper;
+  const palmLower = PALM_GRIP_POINTS.right_lower;
   const palmAxisLocal = palmUpper.subtract(palmLower).normalize();
   const palmAxisQ = parentWorldRot.multiply(
     new Quaternion(palmAxisLocal.x, palmAxisLocal.y, palmAxisLocal.z, 0),

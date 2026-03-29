@@ -179,7 +179,7 @@ export function createDefenceSwingMotion(
     return { type: path.resolvedSwingType, progress: 0, duration: 0.6, windupRatio: 0.4,
       startPos: Vector3.Zero(), windupPos: Vector3.Zero(), strikePos: Vector3.Zero(),
       active: false, power: 0, windupBody: neutralBody(), strikeBody: neutralBody(),
-      startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero() };
+      startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero(), stepInDistance: 0, stepInDir: Vector3.Zero() };
   }
 
   const sf = getWeaponScaleFactors(weapon);
@@ -213,5 +213,7 @@ export function createDefenceSwingMotion(
     windupOffset: windupPos.subtract(rootPos),
     strikeOffset: strikePos.subtract(rootPos),
     rootPosAtStart: rootPos,
+    stepInDistance: 0,
+    stepInDir: Vector3.Zero(),
   };
 }

@@ -61,8 +61,8 @@ export async function equipGameAssetWeapon(
   const length = Vector3.Distance(primaryGrip, tip);
   const pommelDist = Vector3.Distance(primaryGrip, pommel);
 
-  const palmUpper = PALM_GRIP_POINTS.left_upper;
-  const palmLower = PALM_GRIP_POINTS.left_lower;
+  const palmUpper = PALM_GRIP_POINTS.right_upper;
+  const palmLower = PALM_GRIP_POINTS.right_lower;
   const palmMid = Vector3.Lerp(palmUpper, palmLower, 0.5);
 
   const gripToTip = tip.subtract(primaryGrip).normalize();
@@ -81,7 +81,7 @@ export async function equipGameAssetWeapon(
   const gripOnAxis = pommel.add(handleAxis.scale(Vector3.Dot(primaryGrip.subtract(pommel), handleAxis)));
   const gripOffset = primaryGrip.subtract(gripOnAxis).normalize();
   const rotatedOffset = rotateVectorByQuat(gripOffset, rot1);
-  const palmInward = new Vector3(0, 0, -1);
+  const palmInward = new Vector3(0, 0, 1);
   const projRotated = rotatedOffset.subtract(palmGripDir.scale(Vector3.Dot(rotatedOffset, palmGripDir))).normalize();
   const projPalm = palmInward.subtract(palmGripDir.scale(Vector3.Dot(palmInward, palmGripDir))).normalize();
 
