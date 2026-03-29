@@ -36,13 +36,28 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   if (charDirs) {
     chains.leftLeg.poleHint.copyFrom(charDirs.forward);
     chains.rightLeg.poleHint.copyFrom(charDirs.forward);
-    const backward = charDirs.forward.scale(-1);
-    chains.leftArm.poleHint.copyFrom(backward);
-    chains.rightArm.poleHint.copyFrom(backward);
+    // 肘は前方下向き（背中側に行かない）
+    const elbowHint = charDirs.forward.add(new Vector3(0, -0.5, 0)).normalize();
+    chains.leftArm.poleHint.copyFrom(elbowHint);
+    chains.rightArm.poleHint.copyFrom(elbowHint);
   }
 
-  // IKソルブ → 関節クランプ → 関節レディネス → 自己貫通チェック → 再IK (最大2回)
-  for (let pass = 0; pass < 2; pass++) {
+  // 武器手のIKターゲットを背中側に行かせない
+  if (charDirs && character.weapon && chains.rightArm.weight > 0) {
+    const spine = character.combatBones.get('torso');
+    if (spine) {
+      const spinePos = getWorldPos(spine);
+      const toTarget = chains.rightArm.target.subtract(spinePos);
+      const fwdDot = Vector3.Dot(toTarget, charDirs.forward);
+      if (fwdDot < 0) {
+        // 背中側 → 前方に押し出す
+        chains.rightArm.target.addInPlace(charDirs.forward.scale(-fwdDot + 0.05));
+      }
+    }
+  }
+
+  // IKソルブ → 関節クランプ → 自己貫通チェック → 再IK (3パス)
+  for (let pass = 0; pass < 3; pass++) {
     solveIK2Bone(chains.leftLeg, character);
     solveIK2Bone(chains.rightLeg, character);
     solveIK2Bone(chains.leftArm, character);
@@ -59,9 +74,11 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     clampArmRotation(character);
 
     if (pass === 0) {
-      // 関節レディネス: まっすぐすぎる関節を最小曲げ角まで戻す
       maintainJointReadiness(character, deltaTime);
-      // 自己貫通チェック: IKターゲットを押し戻す
+    }
+
+    // 毎パス: 自己貫通チェック → IKターゲットを押し戻す → 次パスで再解決
+    if (pass < 2) {
       resolveBodySelfCollision(character);
     }
   }

@@ -217,60 +217,59 @@ export function createSwingMotion(
     return shoulderWorldPos.add(gripDir.scale(armReach));
   }
 
+  // 全ての振りかぶり・振り終わりは前方(相手側)で行う。背中側には一切行かない。
   switch (type) {
     case 'vertical': {
-      // 振りかぶり: 握り手が自分の頭の高さ
-      // 先端通過点1(相手頭上)から逆算した握り手をベースに、Y座標を頭の高さにする
-      const baseWindup = gripPosForTip(tipPass1);
-      baseWindup.y = myHeadPos.y;
-      const wDir = baseWindup.subtract(shoulderWorldPos).normalize();
+      // 振りかぶり: 前方の頭上に構える (剣道の上段の構え)
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.3)).add(new Vector3(0, armReach * 0.85, 0));
+      const wDir = wTarget.subtract(shoulderWorldPos).normalize();
       windupPos = shoulderWorldPos.add(wDir.scale(armReach));
 
-      // 振り終わり: 握り手が自分の腰の高さ
-      const baseStrike = gripPosForTip(tipPass2);
-      baseStrike.y = myHipsPos.y;
-      const sDir = baseStrike.subtract(shoulderWorldPos).normalize();
+      // 振り終わり: 前方の腰の高さまで振り下ろす
+      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.7));
+      sTarget.y = myHipsPos.y;
+      const sDir = sTarget.subtract(shoulderWorldPos).normalize();
       strikePos = shoulderWorldPos.add(sDir.scale(armReach));
       break;
     }
     case 'horizontal':
     case 'horizontal_r2l': {
-      // 振りかぶり: 握り手が自分の右半身側
-      const baseWindup = gripPosForTip(tipPass1);
-      // 握り手を右半身に寄せる
-      const wRight = shoulderWorldPos.add(charRight.scale(armReach * 0.7)).add(forward.scale(armReach * 0.3));
-      wRight.y = shoulderWorldPos.y;
-      const wrDir = wRight.subtract(shoulderWorldPos).normalize();
+      // 振りかぶり: 前方右側に構える
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.4)).add(charRight.scale(armReach * 0.6));
+      wTarget.y = shoulderWorldPos.y;
+      const wrDir = wTarget.subtract(shoulderWorldPos).normalize();
       windupPos = shoulderWorldPos.add(wrDir.scale(armReach));
 
-      // 振り終わり: 握り手が自分の左半身側
-      const wLeft = shoulderWorldPos.add(charRight.scale(-armReach * 0.5)).add(forward.scale(armReach * 0.4));
-      wLeft.y = shoulderWorldPos.y;
-      const slDir = wLeft.subtract(shoulderWorldPos).normalize();
+      // 振り終わり: 前方左側まで薙ぎ払う
+      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.5)).add(charRight.scale(-armReach * 0.4));
+      sTarget.y = shoulderWorldPos.y;
+      const slDir = sTarget.subtract(shoulderWorldPos).normalize();
       strikePos = shoulderWorldPos.add(slDir.scale(armReach));
       break;
     }
     case 'horizontal_l2r': {
-      // 振りかぶり: 握り手が自分の左半身側
-      const wLeft = shoulderWorldPos.add(charRight.scale(-armReach * 0.5)).add(forward.scale(armReach * 0.3));
-      wLeft.y = shoulderWorldPos.y;
-      const wlDir = wLeft.subtract(shoulderWorldPos).normalize();
+      // 振りかぶり: 前方左側に構える
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.4)).add(charRight.scale(-armReach * 0.4));
+      wTarget.y = shoulderWorldPos.y;
+      const wlDir = wTarget.subtract(shoulderWorldPos).normalize();
       windupPos = shoulderWorldPos.add(wlDir.scale(armReach));
 
-      // 振り終わり: 握り手が自分の右半身側
-      const wRight = shoulderWorldPos.add(charRight.scale(armReach * 0.7)).add(forward.scale(armReach * 0.4));
-      wRight.y = shoulderWorldPos.y;
-      const srDir = wRight.subtract(shoulderWorldPos).normalize();
+      // 振り終わり: 前方右側まで薙ぎ払う
+      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.5)).add(charRight.scale(armReach * 0.6));
+      sTarget.y = shoulderWorldPos.y;
+      const srDir = sTarget.subtract(shoulderWorldPos).normalize();
       strikePos = shoulderWorldPos.add(srDir.scale(armReach));
       break;
     }
     case 'thrust':
     default: {
-      // 振りかぶり: 後方に引く
-      const backDir = forward.scale(-0.8).add(new Vector3(0, 0.1, 0)).normalize();
-      windupPos = shoulderWorldPos.add(backDir.scale(armReach * 0.7));
+      // 振りかぶり: 前方で腰の横に引く (突きの構え)
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.1)).add(charRight.scale(armReach * 0.3));
+      wTarget.y = myHipsPos.y + 0.1;
+      const wDir = wTarget.subtract(shoulderWorldPos).normalize();
+      windupPos = shoulderWorldPos.add(wDir.scale(armReach * 0.6));
 
-      // 振り終わり: 先端が通過点2に届くように握り手を配置
+      // 振り終わり: 前方にまっすぐ突き出す
       strikePos = gripPosForTip(tipPass2);
       break;
     }

@@ -156,8 +156,8 @@ export default function WeaponCombatV2Page() {
         });
 
         // 初期化完了後にテレポートで配置・向きを設定
-        teleportCharacter(char1, new Vector3(0, 0, -2), 0);       // +Z方向を向く
-        teleportCharacter(char2, new Vector3(0, 0, 2), Math.PI);  // -Z方向を向く (f1に向かう)
+        teleportCharacter(char1, new Vector3(0, 0, -2), Math.PI);  // 相手側を向く
+        teleportCharacter(char2, new Vector3(0, 0, 2), 0);        // 相手側を向く (f1に向かう)
 
         // 武器一覧を取得してUIに反映
         const weapons = await fetchGameAssetWeapons();
@@ -184,8 +184,8 @@ export default function WeaponCombatV2Page() {
             resetCharacter(char2);
 
             // 初期位置に再配置
-            teleportCharacter(char1, new Vector3(0, 0, -2), 0);
-            teleportCharacter(char2, new Vector3(0, 0, 2), Math.PI);
+            teleportCharacter(char1, new Vector3(0, 0, -2), Math.PI);
+            teleportCharacter(char2, new Vector3(0, 0, 2), 0);
 
             // 武器装備
             await equipGameAssetWeapon(scene, char1, w1Info, 'front');

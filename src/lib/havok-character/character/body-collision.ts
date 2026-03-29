@@ -1,70 +1,67 @@
 /**
- * ボディ自己貫通防止。IK解決後にボーンセグメント間の距離をチェックし、
- * 貫通している場合はIKターゲットを押し戻す。
+ * ボディ自己貫通防止。
  *
- * 各ボーンセグメント (parent→child) を半径付きカプセルとして扱い、
- * 腕/手が胴体や脚を貫通しないようにする。
- * 胴体側は 3cm の許容食い込み (softMargin) を設定。
+ * IK解決・関節クランプ後に実行し、ボーンセグメント同士が貫通していたら
+ * IKターゲットを体の外側に押し出す。
+ *
+ * 2パスIKの各パスで実行されるため、1回で完全に解決できなくても
+ * 2回目のパスで追加補正される。
  */
 import { Vector3 } from '@babylonjs/core';
 import type { HavokCharacter } from '../types';
 import { getWorldPos } from '@/lib/math-utils';
 
-/** コリジョンカプセル定義 */
 interface CollisionCapsule {
-  /** カプセルのグループ ('torso' | 'arm' | 'leg') — 同グループ内はチェックしない */
   group: string;
-  /** 開始ボーン名 */
   startBone: string;
-  /** 終了ボーン名 */
   endBone: string;
-  /** カプセル半径 (m) */
   radius: number;
-  /** 許容食い込み量 (m) — 胴体側に設定 */
-  softMargin: number;
 }
 
-/** チェック対象のカプセルペア定義 */
 const CAPSULES: CollisionCapsule[] = [
-  // ── 胴体 (softMargin = 0.03m = 3cm の食い込み許容) ──
-  { group: 'torso', startBone: 'mixamorig:Hips', endBone: 'mixamorig:Spine1', radius: 0.12, softMargin: 0.03 },
-  { group: 'torso', startBone: 'mixamorig:Spine1', endBone: 'mixamorig:Neck', radius: 0.12, softMargin: 0.03 },
+  // 胴体
+  { group: 'torso', startBone: 'mixamorig:Hips', endBone: 'mixamorig:Spine1', radius: 0.13 },
+  { group: 'torso', startBone: 'mixamorig:Spine1', endBone: 'mixamorig:Neck', radius: 0.12 },
+  { group: 'torso', startBone: 'mixamorig:Neck', endBone: 'mixamorig:Head', radius: 0.08 },
 
-  // ── 左腕 ──
-  { group: 'leftArm', startBone: 'mixamorig:LeftArm', endBone: 'mixamorig:LeftForeArm', radius: 0.035, softMargin: 0 },
-  { group: 'leftArm', startBone: 'mixamorig:LeftForeArm', endBone: 'mixamorig:LeftHand', radius: 0.03, softMargin: 0 },
+  // 左腕
+  { group: 'leftArm', startBone: 'mixamorig:LeftArm', endBone: 'mixamorig:LeftForeArm', radius: 0.04 },
+  { group: 'leftArm', startBone: 'mixamorig:LeftForeArm', endBone: 'mixamorig:LeftHand', radius: 0.03 },
 
-  // ── 右腕 ──
-  { group: 'rightArm', startBone: 'mixamorig:RightArm', endBone: 'mixamorig:RightForeArm', radius: 0.035, softMargin: 0 },
-  { group: 'rightArm', startBone: 'mixamorig:RightForeArm', endBone: 'mixamorig:RightHand', radius: 0.03, softMargin: 0 },
+  // 右腕
+  { group: 'rightArm', startBone: 'mixamorig:RightArm', endBone: 'mixamorig:RightForeArm', radius: 0.04 },
+  { group: 'rightArm', startBone: 'mixamorig:RightForeArm', endBone: 'mixamorig:RightHand', radius: 0.03 },
 
-  // ── 左脚 ──
-  { group: 'leftLeg', startBone: 'mixamorig:LeftUpLeg', endBone: 'mixamorig:LeftLeg', radius: 0.05, softMargin: 0 },
-  { group: 'leftLeg', startBone: 'mixamorig:LeftLeg', endBone: 'mixamorig:LeftFoot', radius: 0.04, softMargin: 0 },
+  // 左脚
+  { group: 'leftLeg', startBone: 'mixamorig:LeftUpLeg', endBone: 'mixamorig:LeftLeg', radius: 0.055 },
+  { group: 'leftLeg', startBone: 'mixamorig:LeftLeg', endBone: 'mixamorig:LeftFoot', radius: 0.04 },
 
-  // ── 右脚 ──
-  { group: 'rightLeg', startBone: 'mixamorig:RightUpLeg', endBone: 'mixamorig:RightLeg', radius: 0.05, softMargin: 0 },
-  { group: 'rightLeg', startBone: 'mixamorig:RightLeg', endBone: 'mixamorig:RightFoot', radius: 0.04, softMargin: 0 },
+  // 右脚
+  { group: 'rightLeg', startBone: 'mixamorig:RightUpLeg', endBone: 'mixamorig:RightLeg', radius: 0.055 },
+  { group: 'rightLeg', startBone: 'mixamorig:RightLeg', endBone: 'mixamorig:RightFoot', radius: 0.04 },
 ];
 
-/** チェックするペア (異なるグループ間のみ) */
+/** 異グループ間でチェックするペア */
 const CHECK_PAIRS: [string, string][] = [
-  // 腕 vs 胴体
   ['leftArm', 'torso'],
   ['rightArm', 'torso'],
-  // 腕 vs 脚
   ['leftArm', 'leftLeg'],
   ['leftArm', 'rightLeg'],
   ['rightArm', 'leftLeg'],
   ['rightArm', 'rightLeg'],
-  // 脚 vs 胴体 (膝が腹に刺さるケース)
   ['leftLeg', 'torso'],
   ['rightLeg', 'torso'],
+  ['leftArm', 'rightArm'],
 ];
 
-/**
- * 2つの線分間の最近接点とその距離を計算。
- */
+/** IKターゲットを押し戻すべきグループ → チェーン名のマッピング */
+const GROUP_TO_CHAIN: Record<string, string> = {
+  leftArm: 'leftArm',
+  rightArm: 'rightArm',
+  leftLeg: 'leftLeg',
+  rightLeg: 'rightLeg',
+};
+
 function closestPointsBetweenSegments(
   a0: Vector3, a1: Vector3, b0: Vector3, b1: Vector3,
 ): { closestA: Vector3; closestB: Vector3; dist: number } {
@@ -98,65 +95,73 @@ function closestPointsBetweenSegments(
 }
 
 /**
- * IK解決後のボディ自己貫通チェック・補正。
- * updateHavokCharacter() 内で IK ソルブの後に呼び出す。
+ * ボディ自己貫通チェック・補正。
+ * IK解決・関節クランプ後に毎パス呼び出す。
  */
 export function resolveBodySelfCollision(character: HavokCharacter): void {
   const bones = character.allBones;
 
+  // ワールド行列を更新してからボーン位置を取得
+  for (const bone of bones.values()) {
+    bone.computeWorldMatrix(true);
+  }
+
   // カプセルのワールド位置をキャッシュ
-  const capsulePositions = new Map<CollisionCapsule, { start: Vector3; end: Vector3 }>();
+  const capsulePos = new Map<CollisionCapsule, { start: Vector3; end: Vector3 }>();
   for (const cap of CAPSULES) {
     const startBone = bones.get(cap.startBone);
     const endBone = bones.get(cap.endBone);
     if (!startBone || !endBone) continue;
-    capsulePositions.set(cap, {
+    capsulePos.set(cap, {
       start: getWorldPos(startBone),
       end: getWorldPos(endBone),
     });
   }
 
-  // IKチェーン名→ターゲット のマップ (押し戻し先)
   const chains = character.ikChains;
-  const groupToChain: Record<string, { target: Vector3; weight: number } | null> = {
-    leftArm: chains.leftArm.weight > 0 ? chains.leftArm : null,
-    rightArm: chains.rightArm.weight > 0 ? chains.rightArm : null,
-    leftLeg: chains.leftLeg.weight > 0 ? chains.leftLeg : null,
-    rightLeg: chains.rightLeg.weight > 0 ? chains.rightLeg : null,
-    torso: null, // 胴体は押し戻されない (固定)
-  };
 
+  // 各ペアでチェック
   for (const [groupA, groupB] of CHECK_PAIRS) {
     const capsA = CAPSULES.filter(c => c.group === groupA);
     const capsB = CAPSULES.filter(c => c.group === groupB);
 
     for (const capA of capsA) {
-      const posA = capsulePositions.get(capA);
+      const posA = capsulePos.get(capA);
       if (!posA) continue;
 
       for (const capB of capsB) {
-        const posB = capsulePositions.get(capB);
+        const posB = capsulePos.get(capB);
         if (!posB) continue;
 
         const { closestA, closestB, dist } = closestPointsBetweenSegments(
           posA.start, posA.end, posB.start, posB.end,
         );
 
-        // 許容距離 = 両カプセルの半径合計 - softMargin合計
-        const minDist = capA.radius + capB.radius - capA.softMargin - capB.softMargin;
+        const minDist = capA.radius + capB.radius;
 
         if (dist < minDist && dist > 0.001) {
-          // 貫通量
           const overlap = minDist - dist;
-
-          // 押し戻し方向: B→A (腕/脚をBから離す)
           const pushDir = closestA.subtract(closestB).normalize();
-          const pushAmount = overlap;
 
-          // 腕/脚のIKターゲットを押し戻す (胴体は動かさない)
-          const chainA = groupToChain[groupA];
-          if (chainA) {
-            chainA.target.addInPlace(pushDir.scale(pushAmount));
+          // 腕/脚側のIKターゲットを押し出す (余裕を持って1.5倍押す)
+          const pushAmount = overlap * 1.5;
+
+          const chainNameA = GROUP_TO_CHAIN[groupA];
+          const chainNameB = GROUP_TO_CHAIN[groupB];
+
+          // groupAが腕/脚なら押し出す
+          if (chainNameA) {
+            const chain = (chains as any)[chainNameA];
+            if (chain && chain.weight > 0) {
+              chain.target.addInPlace(pushDir.scale(pushAmount));
+            }
+          }
+          // groupBも腕/脚なら逆方向に押し出す
+          if (chainNameB) {
+            const chain = (chains as any)[chainNameB];
+            if (chain && chain.weight > 0) {
+              chain.target.addInPlace(pushDir.scale(-pushAmount));
+            }
           }
         }
       }

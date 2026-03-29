@@ -253,10 +253,9 @@ export function clampShoulderX(character: HavokCharacter): void {
 
 /**
  * Arm (上腕・前腕) のXYZ 3軸回転を制限する。
- * スイング中はスキップ (IKがターゲットに腕を伸ばすのを妨げない)。
+ * スイング中も適用する (人体の可動域を超える動きを防止)。
  */
 export function clampArmRotation(character: HavokCharacter): void {
-  if (character.weaponSwing.swinging) return;
 
   const ua = JOINT_CONFIG.arm.upperArm;
   clampBone3Axis(character, 'mixamorig:LeftArm', ua.x, ua.y, ua.z);
@@ -269,10 +268,8 @@ export function clampArmRotation(character: HavokCharacter): void {
 
 /**
  * Spine/Spine1/Spine2 のXYZ 3軸回転を制限する。
- * スイング中はスキップ (applyBodyMotionが直接Spineを制御するため)。
  */
 export function clampSpineRotation(character: HavokCharacter): void {
-  if (character.weaponSwing.swinging) return;
   const s0 = JOINT_CONFIG.spine;
   clampBone3Axis(character, 'mixamorig:Spine', s0.x, s0.y, s0.z);
 

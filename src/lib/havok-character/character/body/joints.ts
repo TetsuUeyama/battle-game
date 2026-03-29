@@ -22,46 +22,52 @@ export interface AxisLimits3 {
   z: AxisLimitDeg;
 }
 
+/**
+ * 人体の関節可動域に基づく制限値。
+ *
+ * 参考: 日本整形外科学会・日本リハビリテーション医学会の関節可動域表示
+ * https://www.joa.or.jp/jp/member/committee/range_of_motion.html
+ */
 export const JOINT_CONFIG = {
   arm: {
-    /** IKソルバー用の単軸制限 (従来互換) */
-    root: { minBendDeg: 0, maxBendDeg: 170 } as JointLimitDef,  // 肩
-    mid:  { minBendDeg: 5, maxBendDeg: 150 } as JointLimitDef,  // 肘
+    /** IKソルバー用の単軸制限 (肘の曲げ角) */
+    root: { minBendDeg: 0, maxBendDeg: 160 } as JointLimitDef,  // 肩
+    mid:  { minBendDeg: 5, maxBendDeg: 145 } as JointLimitDef,  // 肘: 0°伸展〜145°屈曲
     /** 上腕 (肩関節) のXYZ制限 */
     upperArm: {
-      x: { min: -75,  max: 75 },  // 腕を後ろ / 前上方
-      y: { min: -45,  max: 45 },   // 内旋 / 外旋
-      z: { min: -90, max: 180 },  // 体側 / 真横〜頭上 (IKで大きく動くので広め)
+      x: { min: -50,  max: 60 },   // 伸展50° / 屈曲60° (腕を後ろ/前)
+      y: { min: -40,  max: 40 },   // 内旋40° / 外旋40°
+      z: { min: -45,  max: 170 },  // 内転(体側より内)-45° / 外転+屈曲170°
     } as AxisLimits3,
     /** 前腕 (肘関節) のXYZ制限 */
     foreArm: {
-      x: { min: -150,   max: 0 },   // 肘は伸展0°〜屈曲150°
-      y: { min: -80, max: 80 },    // 前腕の回内/回外
-      z: { min: -150,  max: 5 },     // 肘は横方向ほぼなし
+      x: { min: -145,  max: 0 },   // 屈曲145° / 伸展0°
+      y: { min: -80,  max: 80 },   // 回内80° / 回外80°
+      z: { min: -5,   max: 5 },    // 肘は横方向ほぼ動かない
     } as AxisLimits3,
   },
   leg: {
     root: { minBendDeg: 0, maxBendDeg: 120 } as JointLimitDef,  // 股関節
-    mid:  { minBendDeg: 5, maxBendDeg: 140 } as JointLimitDef,  // 膝
+    mid:  { minBendDeg: 5, maxBendDeg: 130 } as JointLimitDef,  // 膝: 0°伸展〜130°屈曲
   },
   shoulder: {
-    x: { min: -45, max: 45 } as AxisLimitDeg,   // 鎖骨の上下
-    y: { min: -45, max: 45 } as AxisLimitDeg,   // 鎖骨のねじり
-    z: { min: 0,  max: 45 } as AxisLimitDeg,   // 鎖骨の前後
+    x: { min: -20, max: 20 } as AxisLimitDeg,   // 鎖骨の挙上/下制
+    y: { min: -15, max: 15 } as AxisLimitDeg,   // 鎖骨のねじり (小さい)
+    z: { min: 0,   max: 30 } as AxisLimitDeg,   // 鎖骨の前方突出
   },
   spine: {
-    x: { min: -20, max: 30 },   // 前屈 / 後屈
-    y: { min: -45, max: 45 },   // 体幹ひねり
-    z: { min: -15, max: 15 },   // 側屈
+    x: { min: -15, max: 25 },   // 後屈15° / 前屈25°
+    y: { min: -35, max: 35 },   // 体幹回旋 左右35°
+    z: { min: -15, max: 15 },   // 側屈 左右15°
   } as AxisLimits3,
   spine1: {
-    x: { min: -25, max: 25 },   // 前屈 / 後屈
-    y: { min: -45, max: 45 },   // 体幹ひねり
-    z: { min: -25, max: 25 },   // 側屈
+    x: { min: -15, max: 20 },
+    y: { min: -35, max: 35 },
+    z: { min: -15, max: 15 },
   } as AxisLimits3,
   spine2: {
-    x: { min: -20, max: 20 },   // 前屈 / 後屈
-    y: { min: -45, max: 45 },   // 体幹ひねり
-    z: { min: -20, max: 20 },   // 側屈
+    x: { min: -10, max: 15 },
+    y: { min: -30, max: 30 },
+    z: { min: -10, max: 10 },
   } as AxisLimits3,
 } as const;
