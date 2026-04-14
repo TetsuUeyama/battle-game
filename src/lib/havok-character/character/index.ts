@@ -52,3 +52,6 @@ export { computeForceMultiplier, computeForceDetails, computeChainForce } from '
 // Joint readiness
 export { maintainJointReadiness } from './joint-readiness';
 
+// Vox hair attachment
+export { attachVoxHairToHead } from './attach-vox-hair';
+

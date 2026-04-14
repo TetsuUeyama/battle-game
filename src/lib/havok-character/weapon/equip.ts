@@ -12,6 +12,7 @@ import { getWorldPos, rotationBetweenVectors } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
 import { getStanceTargets, getOffHandRestPosition } from './stance';
 import { getWeaponTipWorld } from './physics';
+import { initSolverCache, clearSolverCache } from '../solver/precompute';
 
 /**
  * 武器を装備する。
@@ -28,6 +29,13 @@ export function equipWeapon(
   }
 
   character.weapon = weapon;
+
+  // ソルバーキャッシュを初期化 (有効構えプール + 3基本構えを事前計算)
+  try {
+    initSolverCache(character, weapon);
+  } catch {
+    // ソルバー初期化に失敗した場合は旧プリセットにフォールバック
+  }
 
   if (weaponMesh) {
     weaponMesh.parent = character.weaponAttachR;
@@ -69,6 +77,7 @@ export function unequipWeapon(character: HavokCharacter): void {
   }
   character.weapon = null;
   character.weaponSwing = createWeaponSwingState();
+  clearSolverCache(character);
 }
 
 /**

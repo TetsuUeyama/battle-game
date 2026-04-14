@@ -24,9 +24,9 @@ export const AI_PARAMS = {
   /** 安全距離の追加マージン (m) */
   safeRangeMargin: 0.5,
   /** 腕リーチ (m) — character モードの attackRange 計算用 */
-  armReach: 0.5,
+  armReach: 0.55,
   /** 踏み込みリーチ (m) — character モードの attackRange 計算用 */
-  lungeReach: 0.25,
+  lungeReach: 0.4,
 
   // ─── 攻撃・コンボ ───
   /** maxCombo 計算: max(1, round(この値 - weight * comboWeightFactor)) */

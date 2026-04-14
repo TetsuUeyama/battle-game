@@ -221,15 +221,20 @@ export async function createHavokCharacter(
     prevBonePosY: new Map(),
   };
 
+  // ikBaseRotations: bone.name (プレフィックス付き) をキーとして保存
   for (const chain of [ikChains.leftLeg, ikChains.rightLeg, ikChains.leftArm, ikChains.rightArm]) {
     character.ikBaseRotations.set(chain.root.name, {
       root: (chain.root.rotationQuaternion ?? Quaternion.Identity()).clone(),
       mid: (chain.mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
     });
+    character.ikBaseRotations.set(chain.mid.name, {
+      root: (chain.mid.rotationQuaternion ?? Quaternion.Identity()).clone(),
+      mid: Quaternion.Identity(),
+    });
   }
 
-  // Spine / Spine1 / Spine2 / Head の初期回転も保存 (applyBodyMotion / clampSpineRotation 用)
-  for (const boneName of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2', 'mixamorig:Head']) {
+  // Spine / Spine1 / Spine2 / Head / Shoulder / Hand の初期回転も保存
+  for (const boneName of ['mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2', 'mixamorig:Head', 'mixamorig:LeftShoulder', 'mixamorig:RightShoulder', 'mixamorig:LeftHand', 'mixamorig:RightHand']) {
     const bone = allBones.get(boneName);
     if (bone?.rotationQuaternion) {
       character.ikBaseRotations.set(bone.name, {

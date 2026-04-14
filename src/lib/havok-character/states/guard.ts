@@ -13,14 +13,14 @@ function getGuardState(ai: object): GuardState {
 }
 
 export function handleGuard(ctx: StateContext): StateResult {
-  const { ai, character, dt, decision } = ctx;
+  const { ai, character, opponent, dt, decision } = ctx;
   const guard = getGuardState(ai);
 
   if (!guard.active) {
-    startGuard(character, guard);
+    startGuard(character, guard, opponent);
   }
 
-  const continuing = updateGuard(character, guard, dt);
+  const continuing = updateGuard(character, guard, dt, opponent);
 
   if (!continuing || decision.nextState) {
     endGuard(character, guard);

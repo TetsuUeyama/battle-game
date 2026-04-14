@@ -1,7 +1,10 @@
 'use client';
+import { useState, useCallback } from 'react';
+import { Vector3 as V3, Quaternion } from '@babylonjs/core';
 import type { HavokCharacter, SwingType } from '@/lib/havok-character/types';
 import type { HavokTestState, HavokTestActions } from '../use-havok-state';
 import { JOINT_CONFIG } from '@/lib/havok-character/character/body';
+import type { AxisLimits3 } from '@/lib/havok-character/character/body/joints';
 import { SWING_PRESETS } from '@/lib/havok-character/character/body';
 import { playMotionTest, getBackflipStateRef } from '../motion-test';
 import { startBackflip } from '@/lib/havok-character/actions/backflip';
@@ -74,6 +77,9 @@ export function DebugPanel({ state: s, actions: a, characterRef, onJump }: Props
           Backflip
         </button>
       </div>
+
+      {/* Joint ROM Test */}
+      <JointROMTest characterRef={characterRef} selectedBone={s.selectedBone} onBoneSelect={(b) => a.setSelectedBone(b)} />
 
       {/* Joint Angles */}
       <div style={sectionStyle('#0af')}>
@@ -154,5 +160,138 @@ function JointTable({ angles }: { angles: Record<string, number> }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+// ─── Joint ROM Test ─────────────────────────────────────
+
+/** ボーン名 → JOINT_CONFIG の3軸制限へのマッピング */
+function getLimitsForBone(boneName: string): { label: string; limits: AxisLimits3 } | null {
+  if (boneName.includes('RightArm') && !boneName.includes('Fore')) return { label: 'UpperArm (R)', limits: JOINT_CONFIG.arm.upperArm };
+  if (boneName.includes('LeftArm') && !boneName.includes('Fore')) return { label: 'UpperArm (L)', limits: JOINT_CONFIG.arm.upperArm };
+  if (boneName.includes('RightForeArm')) return { label: 'ForeArm (R)', limits: JOINT_CONFIG.arm.foreArm };
+  if (boneName.includes('LeftForeArm')) return { label: 'ForeArm (L)', limits: JOINT_CONFIG.arm.foreArm };
+  if (boneName === 'mixamorig:RightHand') return { label: 'Hand (R)', limits: JOINT_CONFIG.arm.hand };
+  if (boneName === 'mixamorig:LeftHand') return { label: 'Hand (L)', limits: JOINT_CONFIG.arm.hand };
+  if (boneName.includes('RightShoulder')) return { label: 'Shoulder (R)', limits: { x: JOINT_CONFIG.shoulder.x, y: JOINT_CONFIG.shoulder.y, z: JOINT_CONFIG.shoulder.z } };
+  if (boneName.includes('LeftShoulder')) return { label: 'Shoulder (L)', limits: { x: JOINT_CONFIG.shoulder.x, y: JOINT_CONFIG.shoulder.y, z: JOINT_CONFIG.shoulder.z } };
+  if (boneName === 'mixamorig:Spine') return { label: 'Spine', limits: JOINT_CONFIG.spine };
+  if (boneName === 'mixamorig:Spine1') return { label: 'Spine1', limits: JOINT_CONFIG.spine1 };
+  if (boneName === 'mixamorig:Spine2') return { label: 'Spine2', limits: JOINT_CONFIG.spine2 };
+  return null;
+}
+
+const ROM_BONES = [
+  'mixamorig:RightArm', 'mixamorig:RightForeArm', 'mixamorig:RightHand', 'mixamorig:RightShoulder',
+  'mixamorig:LeftArm', 'mixamorig:LeftForeArm', 'mixamorig:LeftHand', 'mixamorig:LeftShoulder',
+  'mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2',
+];
+
+function JointROMTest({ characterRef, selectedBone, onBoneSelect }: {
+  characterRef: React.RefObject<HavokCharacter | null>;
+  selectedBone: string;
+  onBoneSelect: (b: string) => void;
+}) {
+  const [romBone, setRomBone] = useState('mixamorig:RightArm');
+  const [romX, setRomX] = useState(0);
+  const [romY, setRomY] = useState(0);
+  const [romZ, setRomZ] = useState(0);
+
+  const info = getLimitsForBone(romBone);
+
+  const applyRotation = useCallback((x: number, y: number, z: number) => {
+    const character = characterRef.current;
+    if (!character) return;
+    const bone = character.allBones.get(romBone);
+    if (!bone) return;
+
+    // ベース回転を取得 (ikBaseRotations にボーン名で格納されている)
+    const baseEntry = character.ikBaseRotations.get(romBone);
+    const baseQ = baseEntry?.root;
+    if (!baseQ) return;
+
+    // euler (deg) → quaternion × base
+    const degToRad = (d: number) => d * Math.PI / 180;
+    const qx = Quaternion.RotationAxis(new V3(1, 0, 0), degToRad(x));
+    const qy = Quaternion.RotationAxis(new V3(0, 1, 0), degToRad(y));
+    const qz = Quaternion.RotationAxis(new V3(0, 0, 1), degToRad(z));
+    const delta = qz.multiply(qy.multiply(qx));
+    bone.rotationQuaternion = delta.multiply(baseQ);
+  }, [characterRef, romBone]);
+
+  const handleAxisChange = useCallback((axis: 'x' | 'y' | 'z', value: number) => {
+    const nx = axis === 'x' ? value : romX;
+    const ny = axis === 'y' ? value : romY;
+    const nz = axis === 'z' ? value : romZ;
+    if (axis === 'x') setRomX(value);
+    if (axis === 'y') setRomY(value);
+    if (axis === 'z') setRomZ(value);
+    applyRotation(nx, ny, nz);
+  }, [romX, romY, romZ, applyRotation]);
+
+  const snapTo = useCallback((axis: 'x' | 'y' | 'z', minOrMax: 'min' | 'max') => {
+    if (!info) return;
+    const val = info.limits[axis][minOrMax];
+    handleAxisChange(axis, val);
+  }, [info, handleAxisChange]);
+
+  const resetROM = useCallback(() => {
+    setRomX(0); setRomY(0); setRomZ(0);
+    applyRotation(0, 0, 0);
+  }, [applyRotation]);
+
+  return (
+    <div style={sectionStyle('#f0a')}>
+      <div style={headingStyle('#f0a')}>Joint ROM Test</div>
+
+      {/* ボーン選択 */}
+      <select value={romBone} onChange={e => { setRomBone(e.target.value); setRomX(0); setRomY(0); setRomZ(0); }}
+        style={{ width: '100%', marginBottom: 8, ...selectStyle }}>
+        {ROM_BONES.map(b => (
+          <option key={b} value={b}>{b.replace('mixamorig:', '')}</option>
+        ))}
+      </select>
+
+      {info ? (
+        <>
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>{info.label}</div>
+          {(['x', 'y', 'z'] as const).map(axis => {
+            const lim = info.limits[axis];
+            const val = axis === 'x' ? romX : axis === 'y' ? romY : romZ;
+            return (
+              <div key={axis} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12 }}>
+                  <span style={{ color: axis === 'x' ? '#f66' : axis === 'y' ? '#6f6' : '#66f', fontWeight: 'bold' }}>
+                    {axis.toUpperCase()}
+                  </span>
+                  <span style={{ color: '#fff', fontFamily: 'monospace' }}>{val.toFixed(0)}°</span>
+                  <span style={{ color: '#888', fontSize: 10 }}>[{lim.min}° ~ {lim.max}°]</span>
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <button onClick={() => snapTo(axis, 'min')}
+                    style={{ padding: '2px 6px', background: '#444', color: '#fff', border: 'none', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>
+                    Min
+                  </button>
+                  <input type="range" min={lim.min} max={lim.max} step={1} value={val}
+                    onChange={e => handleAxisChange(axis, Number(e.target.value))}
+                    style={{ flex: 1, height: 6 }} />
+                  <button onClick={() => snapTo(axis, 'max')}
+                    style={{ padding: '2px 6px', background: '#444', color: '#fff', border: 'none', borderRadius: 3, fontSize: 10, cursor: 'pointer' }}>
+                    Max
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <button onClick={resetROM} style={{ ...btnStyle('#555'), marginTop: 4, padding: 6, fontSize: 12 }}>
+            Reset to 0
+          </button>
+        </>
+      ) : (
+        <div style={{ color: '#888', fontSize: 12 }}>
+          このボーンには3軸制限が設定されていません
+        </div>
+      )}
+    </div>
   );
 }

@@ -118,6 +118,30 @@ export interface EmitParams {
   sizeScale?: number;   // multiplier on preset's particleSize
   /** Seconds after emit before collision activates (default: 0.15) */
   collisionDelay?: number;
+  /** Override gravity scale for all particles (default: computed from direction) */
+  gravityOverride?: number;
+}
+
+// ─── Voxel grid collider ────────────────────────────────
+
+/** Grid cell category */
+export const VOXEL_EMPTY = 0;
+export const VOXEL_BODY = 1;       // sticky (water sticks)
+export const VOXEL_EQUIPMENT = 2;  // destroyable (both water & voxel vanish)
+
+/**
+ * 3D occupancy grid for per-voxel collision.
+ * Grid values: 0=empty, 1=body(sticky), 2=equipment(destroyable).
+ */
+export interface VoxelCollider {
+  grid: Uint8Array;
+  gx: number; gy: number; gz: number;
+  originX: number; originY: number; originZ: number;
+  cellSize: number;
+  /** Mesh for sticky drops (body) */
+  displayMesh: Mesh;
+  /** Called when a destroyable voxel is hit. Receives world hit position + grid index. */
+  onDestroyHit?: (pos: Vector3, gridIndex: number) => void;
 }
 
 // ─── Internal types ──────────────────────────────────────
@@ -130,6 +154,7 @@ interface Particle {
   gravityScale: number;
   isSplash: boolean;
   collisionDelay: number;  // seconds after emit before collision is enabled
+  prevPos: Vector3;        // position at start of frame (for ray-march collision)
 }
 
 interface StickyDrop {
@@ -154,6 +179,7 @@ export class ParticleFxSystem {
   private residues: InstancedMesh[] = [];
   private stickyDrops: StickyDrop[] = [];
   private collidables: Mesh[] = [];
+  private voxelColliders: VoxelCollider[] = [];
   private idCounter = 0;
 
   readonly maxParticles: number;
@@ -189,6 +215,16 @@ export class ParticleFxSystem {
 
   addCollidable(mesh: Mesh) {
     this.collidables.push(mesh);
+  }
+
+  /** Register a voxel grid for per-voxel collision */
+  addVoxelCollider(collider: VoxelCollider) {
+    this.voxelColliders.push(collider);
+  }
+
+  /** Remove all voxel colliders (e.g. when switching targets) */
+  clearVoxelColliders() {
+    this.voxelColliders = [];
   }
 
   // ── Templates ────────────────────────────────────────
@@ -248,7 +284,7 @@ export class ParticleFxSystem {
         const vertFactor = 1.0 - p.verticalDamping * Math.abs(dir.y);
         const speedVar = params.speed * p.speedMul * Math.max(vertFactor, 0.2) * (0.8 + Math.random() * 0.4);
         const velocity = dir.scale(speedVar);
-        const gravityScale = this.calcGravityScale(dir);
+        const gravityScale = params.gravityOverride ?? this.calcGravityScale(dir);
 
         this.particles.push({
           mesh: inst,
@@ -258,6 +294,7 @@ export class ParticleFxSystem {
           gravityScale,
           isSplash: false,
           collisionDelay: params.collisionDelay ?? 0.15,
+          prevPos: inst.position.clone(),
         });
       }
     }
@@ -331,6 +368,7 @@ export class ParticleFxSystem {
         gravityScale: 2.0,
         isSplash: true,
         collisionDelay: 0,
+        prevPos: inst.position.clone(),
       });
     }
   }
@@ -361,6 +399,41 @@ export class ParticleFxSystem {
     );
     inst.visibility = this.preset.residueAlpha * (0.8 + Math.random() * 0.4);
     this.residues.push(inst);
+  }
+
+  // ── Voxel ray-march (3D DDA) ─────────────────────────
+
+  private rayMarchVoxelGrid(
+    from: Vector3, to: Vector3, c: VoxelCollider,
+  ): { pos: Vector3; category: number; gridIndex: number } | null {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (dist < 1e-6) return null;
+
+    const step = c.cellSize * 0.5;
+    const steps = Math.ceil(dist / step);
+    const invSteps = 1 / steps;
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i * invSteps;
+      const wx = from.x + dx * t;
+      const wy = from.y + dy * t;
+      const wz = from.z + dz * t;
+
+      const ix = Math.floor((wx - c.originX) / c.cellSize);
+      const iy = Math.floor((wy - c.originY) / c.cellSize);
+      const iz = Math.floor((wz - c.originZ) / c.cellSize);
+
+      if (ix < 0 || ix >= c.gx || iy < 0 || iy >= c.gy || iz < 0 || iz >= c.gz) continue;
+      const gi = ix + iy * c.gx + iz * c.gx * c.gy;
+      const cat = c.grid[gi];
+      if (cat) {
+        return { pos: new Vector3(wx, wy, wz), category: cat, gridIndex: gi };
+      }
+    }
+    return null;
   }
 
   // ── Sticky (surface) ─────────────────────────────────
@@ -424,6 +497,7 @@ export class ParticleFxSystem {
       pt.velocity.x *= drag;
       pt.velocity.z *= drag;
 
+      pt.prevPos.copyFrom(pt.mesh.position);
       pt.mesh.position.addInPlace(pt.velocity.scale(dt));
 
       // mesh collision (point-in-AABB, skip during collision delay after emit)
@@ -456,6 +530,33 @@ export class ParticleFxSystem {
               const spd = pt.velocity.length();
               if (spd > 1.5) {
                 this.spawnSplash(sp, Math.min(Math.floor(spd * 0.5 * p.splashMul), 2));
+              }
+            }
+            pt.mesh.dispose();
+            stuck = true;
+            break;
+          }
+        }
+      }
+      // voxel grid collision (ray-march from prevPos to current pos)
+      if (!stuck && pt.life > pt.collisionDelay) {
+        for (let vc = 0; vc < this.voxelColliders.length; vc++) {
+          const c = this.voxelColliders[vc];
+          if (c.displayMesh.isDisposed()) continue;
+          const hit = this.rayMarchVoxelGrid(pt.prevPos, pt.mesh.position, c);
+          if (hit) {
+            if (hit.category === VOXEL_EQUIPMENT) {
+              // Destroyable: both water and voxel vanish
+              c.grid[hit.gridIndex] = VOXEL_EMPTY;
+              c.onDestroyHit?.(hit.pos, hit.gridIndex);
+            } else {
+              // Body/hair: water sticks to surface
+              this.placeSticky(hit.pos, c.displayMesh, pt.mesh.scaling.x);
+              if (!pt.isSplash && p.splashOnMesh) {
+                const spd = pt.velocity.length();
+                if (spd > 1.5) {
+                  this.spawnSplash(hit.pos, Math.min(Math.floor(spd * 0.5 * p.splashMul), 2));
+                }
               }
             }
             pt.mesh.dispose();
@@ -529,6 +630,7 @@ export class ParticleFxSystem {
               gravityScale: 1.0,
               isSplash: true,
               collisionDelay: 0,
+              prevPos: inst.position.clone(),
             });
           }
           s.mesh.dispose();
@@ -551,6 +653,7 @@ export class ParticleFxSystem {
     this.stickyDrops.forEach(s => s.mesh.dispose());
     this.stickyDrops = [];
     this.collidables = [];
+    this.voxelColliders = [];
     this.particleTpl?.dispose();
     this.particleTpl = null;
     this.residueTpl?.dispose();

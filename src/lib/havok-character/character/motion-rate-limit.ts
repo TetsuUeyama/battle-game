@@ -12,9 +12,14 @@ import { Quaternion } from '@babylonjs/core';
 import type { HavokCharacter } from '../types';
 import { BONE_ANGULAR_SPEED, PART_LINEAR_SPEED } from './body/motion-speed';
 
-/** applyBodyMotion が直接制御するボーン (スイング中はスキップ) */
-const SWING_CONTROLLED_BONES = new Set([
-  'mixamorig:Spine', 'mixamorig:Spine1', 'mixamorig:Spine2',
+/** レート制限をスキップするボーン: IK + clamp が最終権限を持つボーンは除外 */
+const RATE_LIMIT_SKIP_BONES = new Set([
+  // 腕: IK + clampArmRotation が制御
+  'mixamorig:LeftArm', 'mixamorig:RightArm',
+  'mixamorig:LeftForeArm', 'mixamorig:RightForeArm',
+  'mixamorig:LeftHand', 'mixamorig:RightHand',
+  // 肩: clampShoulderX が制御
+  'mixamorig:LeftShoulder', 'mixamorig:RightShoulder',
 ]);
 
 /**
@@ -26,9 +31,16 @@ export function enforceMotionRateLimit(character: HavokCharacter, dt: number): v
   const swinging = character.weaponSwing.swinging;
 
   for (const [boneName, maxAngVel] of Object.entries(BONE_ANGULAR_SPEED)) {
-    // スイング中: applyBodyMotion が制御するボーンはスキップ
-    if (swinging && SWING_CONTROLLED_BONES.has(boneName)) {
-      // prev は更新する (スイング終了後のレート制限基準にするため)
+    // IK + clamp が最終権限を持つボーンは常にスキップ
+    if (RATE_LIMIT_SKIP_BONES.has(boneName)) {
+      const bone = character.allBones.get(boneName);
+      if (bone?.rotationQuaternion) {
+        prev.set(boneName, bone.rotationQuaternion.clone());
+      }
+      continue;
+    }
+    // スイング中: Spine はスキップ (applyBodyMotion が制御)
+    if (swinging && boneName.includes('Spine')) {
       const bone = character.allBones.get(boneName);
       if (bone?.rotationQuaternion) {
         prev.set(boneName, bone.rotationQuaternion.clone());

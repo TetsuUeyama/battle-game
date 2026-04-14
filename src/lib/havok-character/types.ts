@@ -395,6 +395,8 @@ export interface SwingMotion {
   worldStrikePos?: Vector3;
   /** ワールド空間の振りかぶり位置 */
   worldWindupPos?: Vector3;
+  /** 肩位置の root からのオフセット (円弧補間用) */
+  shoulderOffset?: Vector3;
   /** 弧を描く攻撃 (horizontal用) */
   arcSwing?: {
     /** 弧の中心 (root相対) = 肩位置 */
@@ -464,6 +466,8 @@ export interface CombatAI {
   comboRemaining: number;
   /** コンボ: 1セットの最大攻撃回数 */
   maxCombo: number;
+  /** 防御専用モード (攻撃しない、ガード/防御スイング/回避のみ) */
+  defenseOnly: boolean;
 }
 
 /** 標的のランダム移動 */
@@ -595,6 +599,7 @@ export interface StateContext {
 export interface StateResult {
   hit: boolean;
   damage: number;
+  blocked?: boolean;
 }
 
 /** 各ステートハンドラの関数シグネチャ */

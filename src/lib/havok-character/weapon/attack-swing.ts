@@ -20,7 +20,6 @@ import { getWorldPos, applyWorldDeltaRotation } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
 import { getOffHandRestPosition } from './stance';
 import { WEAPON_SCALE_CONFIG as WSC, SWING_PRESETS, scalePreset, JOINT_CONFIG } from '../character/body';
-import { computeForceMultiplier } from '../character/force-propagation';
 
 // ─── Weapon Scale Factors ────────────────────────────────
 
@@ -97,7 +96,7 @@ export function createSwingMotion(
     return { type, progress: 0, duration: 0.6, windupRatio: 0.4, startPos: Vector3.Zero(), windupPos: Vector3.Zero(), strikePos: Vector3.Zero(), active: false, power: 0, windupBody: neutralBody(), strikeBody: neutralBody(), startOffset: Vector3.Zero(), windupOffset: Vector3.Zero(), strikeOffset: Vector3.Zero(), rootPosAtStart: Vector3.Zero(), stepInDistance: 0, stepInDir: Vector3.Zero() };
   }
 
-  const { forward, charRight } = dirs;
+  const { forward, charRight } = dirs; // forward = キャラの視覚的な前方
   const weapon = character.weapon;
   const swing = character.weaponSwing;
   const p = Math.max(0, Math.min(100, power)) / 100;
@@ -220,42 +219,41 @@ export function createSwingMotion(
   // 全ての振りかぶり・振り終わりは前方(相手側)で行う。背中側には一切行かない。
   switch (type) {
     case 'vertical': {
-      // 振りかぶり: 前方の頭上に構える (剣道の上段の構え)
-      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.3)).add(new Vector3(0, armReach * 0.85, 0));
-      const wDir = wTarget.subtract(shoulderWorldPos).normalize();
-      windupPos = shoulderWorldPos.add(wDir.scale(armReach));
+      // 振りかぶり: 手を頭上高く、武器先端が背中側を向くように後方寄りに上げる
+      windupPos = shoulderWorldPos
+        .add(new Vector3(0, armReach * 0.9, 0))
+        .add(forward.scale(-armReach * 0.3));
 
-      // 振り終わり: 前方の腰の高さまで振り下ろす
-      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.7));
-      sTarget.y = myHipsPos.y;
-      const sDir = sTarget.subtract(shoulderWorldPos).normalize();
-      strikePos = shoulderWorldPos.add(sDir.scale(armReach));
+      // 振り下ろし: 前方下方に振り抜く (相手の体を通過する前提)
+      strikePos = shoulderWorldPos
+        .add(forward.scale(armReach * 0.7))
+        .add(new Vector3(0, -armReach * 0.8, 0));
       break;
     }
     case 'horizontal':
     case 'horizontal_r2l': {
-      // 振りかぶり: 前方右側に構える
-      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.4)).add(charRight.scale(armReach * 0.6));
+      // 振りかぶり: 右側に大きく引く
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.2)).add(charRight.scale(armReach * 0.85));
       wTarget.y = shoulderWorldPos.y;
       const wrDir = wTarget.subtract(shoulderWorldPos).normalize();
       windupPos = shoulderWorldPos.add(wrDir.scale(armReach));
 
-      // 振り終わり: 前方左側まで薙ぎ払う
-      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.5)).add(charRight.scale(-armReach * 0.4));
+      // 振り終わり: 左側まで大きく薙ぎ払う
+      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.3)).add(charRight.scale(-armReach * 0.7));
       sTarget.y = shoulderWorldPos.y;
       const slDir = sTarget.subtract(shoulderWorldPos).normalize();
       strikePos = shoulderWorldPos.add(slDir.scale(armReach));
       break;
     }
     case 'horizontal_l2r': {
-      // 振りかぶり: 前方左側に構える
-      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.4)).add(charRight.scale(-armReach * 0.4));
+      // 振りかぶり: 左側に大きく引く
+      const wTarget = shoulderWorldPos.add(forward.scale(armReach * 0.2)).add(charRight.scale(-armReach * 0.7));
       wTarget.y = shoulderWorldPos.y;
       const wlDir = wTarget.subtract(shoulderWorldPos).normalize();
       windupPos = shoulderWorldPos.add(wlDir.scale(armReach));
 
-      // 振り終わり: 前方右側まで薙ぎ払う
-      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.5)).add(charRight.scale(armReach * 0.6));
+      // 振り終わり: 右側まで大きく薙ぎ払う
+      const sTarget = shoulderWorldPos.add(forward.scale(armReach * 0.3)).add(charRight.scale(armReach * 0.85));
       sTarget.y = shoulderWorldPos.y;
       const srDir = sTarget.subtract(shoulderWorldPos).normalize();
       strikePos = shoulderWorldPos.add(srDir.scale(armReach));
@@ -275,9 +273,11 @@ export function createSwingMotion(
     }
   }
 
-  // ─── ボディモーション (無効化: Spine類の動きは使わない) ───
-  const windupBody = neutralBody();
-  const strikeBody = neutralBody();
+  // ─── ボディモーション (SWING_PRESETS から取得) ───
+  const presetKey = opts.opponent ? `${type}_vs` : type;
+  const preset = SWING_PRESETS[presetKey] ?? SWING_PRESETS[type];
+  const windupBody = preset ? scalePreset(preset.windup, p, bc, gc) : neutralBody();
+  const strikeBody = preset ? scalePreset(preset.strike, p, bc, gc) : neutralBody();
 
   // ─── 踏み込み距離の算出 ───
   // 武器先端が通過点2に届くために必要な距離
@@ -291,13 +291,14 @@ export function createSwingMotion(
   else stepInDir.copyFrom(forward);
 
   // ─── 時間 ───
+  // 振りかぶり (予備動作) + 振り下ろし (高速攻撃)
   const baseDuration = opts.isComboFollow
-    ? (0.35 + (1.0 - p) * 0.08) * sf.durationScale
-    : (0.4 + (1.0 - p) * 0.1) * sf.durationScale;
+    ? (0.25 + (1.0 - p) * 0.05) * sf.durationScale
+    : (0.35 + (1.0 - p) * 0.08) * sf.durationScale;
 
   const motion: SwingMotion = {
     type, progress: 0, duration: baseDuration,
-    windupRatio: opts.isComboFollow ? 0.3 + p * 0.1 : 0.35 + p * 0.1,
+    windupRatio: opts.isComboFollow ? 0.5 : 0.6,  // 振りかぶり60%、振り下ろし40%
     startPos, windupPos, strikePos,
     active: true, power: p, windupBody, strikeBody,
     startOffset: startPos.subtract(rootPos),
@@ -308,6 +309,7 @@ export function createSwingMotion(
     stepInDir,
     worldStrikePos: strikePos.clone(),
     worldWindupPos: windupPos.clone(),
+    shoulderOffset: shoulderWorldPos.subtract(rootPos),
   };
 
   // 横振り: 弧を描く (arcSwingは使わず、worldWindupPos/worldStrikePosの直線補間で十分)
@@ -402,15 +404,18 @@ export function updateSwingMotion(motion: SwingMotion, dt: number, currentRootPo
   const strike = motion.worldStrikePos ?? root.add(motion.strikeOffset);
 
   if (p < wr) {
+    // 振りかぶり: start → windup (ease-out: 素早く上げて頂点で減速)
     const t = p / wr;
-    const eased = t * t;
+    const eased = 1.0 - (1.0 - t) * (1.0 - t);
     return {
       handTarget: Vector3.Lerp(start, windup, eased),
       body: lerpBody(zero, motion.windupBody, eased),
     };
   } else {
+    // 振り下ろし: windup → strike を直線補間
+    // ほぼ線形で高速に振り下ろす (わずかに加速)
     const t = (p - wr) / (1.0 - wr);
-    const eased = 1.0 - (1.0 - t) * (1.0 - t);
+    const eased = t * (2.0 - t); // ease-out-ish: 最初から速い
     return {
       handTarget: Vector3.Lerp(windup, strike, eased),
       body: lerpBody(motion.windupBody, motion.strikeBody, eased),
@@ -438,15 +443,12 @@ export function applyBodyMotion(
   forward: Vector3,
   charRight: Vector3,
 ): void {
-  const fm = computeForceMultiplier(character);
-
   // torsoLean/torsoTwist を -1〜+1 の「使用率」として解釈し、
   // 各Spineの可動域制限の端まで回転させる。
   // lean>0 → 前傾, lean<0 → 後傾
   // twist>0 → 右ひねり, twist<0 → 左ひねり
-  // ※ Babylon.js左手座標系: RotationAxis(charRight, 正) = 後傾 なので lean の符号を反転して渡す
-  const leanNorm = Math.max(-1, Math.min(1, body.torsoLean * fm * 3.0));  // radを正規化 (0.35rad≒1.0)
-  const twistNorm = Math.max(-1, Math.min(1, body.torsoTwist * fm * 1.5));
+  const leanNorm = Math.max(-1, Math.min(1, body.torsoLean * 3.0));  // radを正規化 (0.33rad≒1.0)
+  const twistNorm = Math.max(-1, Math.min(1, body.torsoTwist * 1.5)); // radを正規化 (0.67rad≒1.0)
 
   const spineConfigs = [
     { name: 'mixamorig:Spine',  limits: JOINT_CONFIG.spine },
@@ -487,10 +489,10 @@ export function applyBodyMotion(
   // 腰
   const hipsBone = character.allBones.get('mixamorig:Hips');
   if (hipsBone) {
-    hipsBone.position.y = character.hipsBaseY + body.hipsOffset * fm;
+    hipsBone.position.y = character.hipsBaseY + body.hipsOffset;
   }
   if (Math.abs(body.hipsForward) > 0.001) {
-    character.root.position.addInPlace(forward.scale(body.hipsForward * fm));
+    character.root.position.addInPlace(forward.scale(body.hipsForward));
   }
 
   // オフハンド (左手)
@@ -498,9 +500,9 @@ export function applyBodyMotion(
       && character.ikChains.leftArm.weight > 0) {
     const restPos = getOffHandRestPosition(character);
     if (restPos) {
-      const offset = forward.scale(body.offHandOffset.x * fm)
-        .add(Vector3.Up().scale(body.offHandOffset.y * fm))
-        .add(charRight.scale(body.offHandOffset.z * fm));
+      const offset = forward.scale(body.offHandOffset.x)
+        .add(Vector3.Up().scale(body.offHandOffset.y))
+        .add(charRight.scale(body.offHandOffset.z));
       character.ikChains.leftArm.target.copyFrom(restPos.add(offset));
     }
   }

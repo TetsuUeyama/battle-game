@@ -27,6 +27,8 @@ import { turnToward } from '../actions/turn-toward';
 import { AI_PARAMS as P } from '../character/body';
 import { evaluate } from './evaluate';
 import { decide } from './decide';
+import { buildCombatContext } from '../solver/combat-context';
+import { getSolverCache } from '../solver/precompute';
 
 // ─── ステートハンドラの登録 ──────────────────────────────
 
@@ -79,6 +81,7 @@ export function createCombatAI(targetNode: TransformNode, weapon: WeaponPhysics)
     enabled: false,
     comboRemaining: 0,
     maxCombo: 3,
+    defenseOnly: false,
   };
 }
 
@@ -110,6 +113,7 @@ export function createCombatAIvsCharacter(
     enabled: false,
     comboRemaining: 0,
     maxCombo: combo,
+    defenseOnly: false,
   };
 }
 
@@ -138,6 +142,15 @@ function dispatch(
 
   const situation = evaluate(ai, character, opponent, dist);
   const decision = decide(situation, ai);
+
+  // ソルバーキャッシュがあれば戦況コンテキストを構築・保存 (動的構え微調整用)
+  if (getSolverCache(character)) {
+    const combatCtx = buildCombatContext(
+      situation, character, opponent,
+      decision.stanceIntent, decision.attackIntent,
+    );
+    (character as any)._combatContext = combatCtx;
+  }
 
   const handler = STATE_HANDLERS[ai.state];
   if (!handler) return { hit: false, damage: 0 };

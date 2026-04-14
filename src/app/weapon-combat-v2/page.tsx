@@ -200,6 +200,7 @@ export default function WeaponCombatV2Page() {
             ai2 = createCombatAIvsCharacter(char1, char2.weapon);
             ai1.enabled = true;
             ai2.enabled = true;
+            ai2.defenseOnly = true; // [テスト用] 赤は防御のみ
 
             f1Hp = 100; f2Hp = 100;
             matchEnded = false;

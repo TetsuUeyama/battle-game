@@ -17,7 +17,7 @@ export function setupScene(canvas: HTMLCanvasElement): SceneObjects {
   const scene = new Scene(engine);
   scene.clearColor = new Color4(0.12, 0.12, 0.18, 1);
 
-  const camera = new ArcRotateCamera('cam', Math.PI / 2, Math.PI / 3, 3, new Vector3(0, 0.8, 0), scene);
+  const camera = new ArcRotateCamera('cam', -Math.PI / 2, Math.PI / 3, 3, new Vector3(0, 0.8, 0), scene);
   camera.attachControl(canvas, true);
   camera.lowerRadiusLimit = 0.5;
   camera.upperRadiusLimit = 10;

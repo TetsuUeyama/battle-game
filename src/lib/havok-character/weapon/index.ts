@@ -33,5 +33,8 @@ export {
 // 構え位置
 export { getOffHandRestPosition, getStanceTargets, updateStance } from './stance';
 
+// 手首回転・武器慣性
+export { updateWristRotation } from './wrist-control';
+
 // 練習用標的 (作成 + ランダム移動)
 export { createTarget, createTargetMover, updateTargetMover } from './target';

@@ -1,14 +1,27 @@
 /**
  * 武器構えの位置算出。グリップ位置・オフハンド休息位置・構えターゲットを計算する。
+ *
+ * ソルバーキャッシュが存在する場合はソルバー結果を使用し、
+ * 存在しない場合は旧プリセット (front/side/overhead) にフォールバックする。
  */
 import { Vector3 } from '@babylonjs/core';
 import type { HavokCharacter, WeaponPhysics, StanceType } from '../types';
 import { PALM_OFFSET } from '../types';
 import { getWorldPos } from '@/lib/math-utils';
 import { getCharacterDirections } from '../character/directions';
+import { getSolverCache } from '../solver/precompute';
+import { reconstructStance } from '../solver/stance-solver';
+import type { StanceLevel } from '../solver/types';
 
 /** 手のひら中心オフセット */
 const PALM = PALM_OFFSET;
+
+/** StanceType → StanceLevel のマッピング */
+const STANCE_TO_LEVEL: Record<StanceType, StanceLevel> = {
+  'overhead': 'upper',
+  'front': 'middle',
+  'side': 'lower',
+};
 
 /**
  * 片手武器時のオフハンド(左手)の自然な休息位置。
@@ -27,8 +40,31 @@ export function getOffHandRestPosition(character: HavokCharacter): Vector3 | nul
 
 /**
  * 構えごとのグリップ位置・武器方向・左手位置を算出。
+ *
+ * ソルバーキャッシュがあればソルバー結果を使用、なければ旧プリセットにフォールバック。
  */
 export function getStanceTargets(
+  character: HavokCharacter,
+  stance: StanceType,
+  weapon: WeaponPhysics,
+): { rightTarget: Vector3; leftTarget: Vector3 | null; weaponDir: Vector3 } {
+  // ソルバーキャッシュがあれば使用
+  const cache = getSolverCache(character);
+  if (cache) {
+    const level = STANCE_TO_LEVEL[stance];
+    const baseResult = cache.baseStances[level];
+    // 角度パラメータ (theta/phi/reachRatio) から現在の肩位置・facingで再計算
+    return reconstructStance(baseResult, character, weapon);
+  }
+
+  // フォールバック: 旧プリセット
+  return getStanceTargetsFallback(character, stance, weapon);
+}
+
+/**
+ * 旧プリセットによる構え位置計算 (フォールバック用)。
+ */
+function getStanceTargetsFallback(
   character: HavokCharacter,
   stance: StanceType,
   weapon: WeaponPhysics,
@@ -41,15 +77,15 @@ export function getStanceTargets(
   }
 
   const chestPos = getWorldPos(spine2);
-  const { forward, charRight, charLeft } = dirs;
+  const { forward: facing, charRight } = dirs;
 
   let gripPos: Vector3;
   let weaponDir: Vector3;
 
   switch (stance) {
     case 'front': {
-      gripPos = chestPos.add(forward.scale(0.3)).add(charRight.scale(0.1));
-      weaponDir = forward.scale(0.7).add(Vector3.Down().scale(0.3)).normalize();
+      gripPos = chestPos.add(facing.scale(0.3)).add(charRight.scale(0.1));
+      weaponDir = facing.scale(0.7).add(Vector3.Down().scale(0.3)).normalize();
       break;
     }
     case 'side': {
@@ -61,8 +97,8 @@ export function getStanceTargets(
     case 'overhead': {
       const headBone = character.combatBones.get('head');
       const headPos = headBone ? getWorldPos(headBone) : chestPos.add(new Vector3(0, 0.3, 0));
-      gripPos = headPos.add(new Vector3(0, 0.15, 0)).add(forward.scale(-0.1)).add(charRight.scale(0.05));
-      weaponDir = forward.scale(-0.5).add(Vector3.Down().scale(0.5)).normalize();
+      gripPos = headPos.add(new Vector3(0, 0.15, 0)).add(facing.scale(0.1)).add(charRight.scale(0.05));
+      weaponDir = facing.scale(0.5).add(Vector3.Down().scale(0.5)).normalize();
       break;
     }
   }

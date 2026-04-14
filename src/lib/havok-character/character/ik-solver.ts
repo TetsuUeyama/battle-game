@@ -3,7 +3,6 @@
  */
 import { Vector3, Quaternion, Matrix, TransformNode } from '@babylonjs/core';
 import type { IKChain, HavokCharacter } from '../types';
-import { JOINT_LIMITS } from '../types';
 import { JOINT_CONFIG } from './body/joints';
 import {
   getWorldPos, distanceBetweenBones, rotationBetweenVectors, applyWorldDeltaRotation,
@@ -103,7 +102,7 @@ export function solveIK2Bone(chain: IKChain, character: HavokCharacter): void {
 export function clampJointAngles(chain: IKChain, character: HavokCharacter, limbType: 'arm' | 'leg'): void {
   if (chain.weight <= 0) return;
 
-  const limits = JOINT_LIMITS[limbType];
+  const limits = JOINT_CONFIG[limbType];
   const { root, mid, end } = chain;
 
   root.computeWorldMatrix(true);
@@ -176,18 +175,11 @@ export function createIKChains(
 
 // ─── 3軸制限の共通ヘルパー ──────────────────────────────
 
-const _boneBaseRots = new WeakMap<object, Map<string, Quaternion>>();
-
-/** T-pose基準回転を取得 (初回呼び出し時に記録) */
+/** T-pose基準回転を取得 (ikBaseRotations を優先参照) */
 function getBoneBaseRot(character: HavokCharacter, boneName: string): Quaternion | null {
-  if (!_boneBaseRots.has(character)) _boneBaseRots.set(character, new Map());
-  const map = _boneBaseRots.get(character)!;
-  const bone = character.allBones.get(boneName);
-  if (!bone?.rotationQuaternion) return null;
-  if (!map.has(boneName)) {
-    map.set(boneName, bone.rotationQuaternion.clone());
-  }
-  return map.get(boneName)!;
+  const ikEntry = character.ikBaseRotations.get(boneName);
+  if (ikEntry) return ikEntry.root;
+  return null;
 }
 
 /** Quaternion → Euler XYZ (degrees) */
@@ -264,6 +256,10 @@ export function clampArmRotation(character: HavokCharacter): void {
   const fa = JOINT_CONFIG.arm.foreArm;
   clampBone3Axis(character, 'mixamorig:LeftForeArm', fa.x, fa.y, fa.z);
   clampBone3Axis(character, 'mixamorig:RightForeArm', fa.x, fa.y, fa.z);
+
+  const ha = JOINT_CONFIG.arm.hand;
+  clampBone3Axis(character, 'mixamorig:LeftHand', ha.x, ha.y, ha.z);
+  clampBone3Axis(character, 'mixamorig:RightHand', ha.x, ha.y, ha.z);
 }
 
 /**

@@ -36,5 +36,5 @@ export function handleAttack(ctx: StateContext): StateResult {
     }
   }
 
-  return { hit: result.hit, damage: result.damage };
+  return { hit: result.hit, damage: result.damage, blocked: result.blocked };
 }

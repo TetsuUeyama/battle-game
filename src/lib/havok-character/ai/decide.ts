@@ -9,6 +9,8 @@
  */
 import type { CombatAI, CombatAIState, SwingType } from '../types';
 import type { Situation } from './evaluate';
+import type { AttackIntent, StanceIntent } from '../solver/types';
+import { decideAttackIntent, decideStanceIntent } from '../solver/combat-context';
 
 /** 行動決定の結果 */
 export interface Decision {
@@ -36,6 +38,12 @@ export interface Decision {
   circleDir: number;
   /** circle の持続時間 (秒) */
   circleDuration: number;
+
+  // ─── 行動意図 (ソルバー連携) ───
+  /** 攻撃の意図 */
+  attackIntent: AttackIntent;
+  /** 構えの意図 */
+  stanceIntent: StanceIntent;
 }
 
 /**
@@ -45,13 +53,13 @@ export function decide(situation: Situation, ai: CombatAI): Decision {
   const s = situation;
 
   // ─── 攻撃タイプ選択 ───
-  const attackType = pickAttackType(s);
+  const attackType: SwingType = 'vertical'; // [一時的] 縦振りのみ // pickAttackType(s);
 
   // ─── 攻撃パワー ───
-  const attackPower = decideAttackPower(s);
+  const attackPower = 100; // [一時的] 100%固定 // decideAttackPower(s);
 
   // ─── コンボ回数 ───
-  const comboCount = decideComboCount(s, ai);
+  const comboCount = 1; // [一時的] 1回固定 // decideComboCount(s, ai);
 
   // ─── コンボ継続判断 ───
   const shouldContinueCombo = decideComboContine(s);
@@ -65,6 +73,10 @@ export function decide(situation: Situation, ai: CombatAI): Decision {
   // ─── circle パラメータ ───
   const { circleDir, circleDuration } = decideCircleParams(s);
 
+  // ─── 行動意図 (ソルバー連携) ───
+  const attackIntent = decideAttackIntent(s);
+  const stanceIntent = decideStanceIntent(s);
+
   return {
     nextState,
     shouldStartAttack: nextState === 'attack' && ai.state === 'close_in',
@@ -75,6 +87,8 @@ export function decide(situation: Situation, ai: CombatAI): Decision {
     targetBone,
     circleDir,
     circleDuration,
+    attackIntent,
+    stanceIntent,
   };
 }
 
@@ -208,6 +222,34 @@ function decideNextState(s: Situation, ai: CombatAI): CombatAIState | null {
   // クールダウン減算 (dtが渡されないのでSituation内の情報で代用)
   const cd = _defenceCooldowns.get(ai) ?? 0;
   if (cd > 0) _defenceCooldowns.set(ai, cd - 0.016); // ~60fps想定
+
+  // ── 防御専用モード ──
+  if (ai.defenseOnly) {
+    switch (ai.state) {
+      case 'idle':
+        if (s.inPursueRange) return 'pursue';
+        break;
+      case 'pursue':
+        if (s.inSafeRange) return 'circle';
+        break;
+      case 'circle':
+        // 相手が攻撃中 → ガードのみ
+        if (s.opponentAttacking && s.opponentTipDist < 2.0) {
+          return 'guard';
+        }
+        break;
+      case 'guard':
+        if (!s.opponentAttacking) return 'circle';
+        break;
+      case 'swing_defence':
+        break; // ステート内で完了 → circle
+      case 'avoidance':
+        break; // ステート内で完了 → circle
+      default:
+        return 'circle';
+    }
+    return null;
+  }
 
   switch (ai.state) {
     case 'idle':

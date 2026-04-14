@@ -11,12 +11,13 @@ import {
   solveIK2Bone, clampJointAngles, clampShoulderX, clampArmRotation, clampSpineRotation,
   updateFootStepping, calculateCenterOfMass, updateDebugVisuals, keepFootHorizontal,
 } from './index';
-import { updateWeaponPower } from '../weapon';
+import { updateWeaponPower, updateWristRotation } from '../weapon';
 import { updateJump } from '../actions/jump';
 import { resolveBodySelfCollision } from './body-collision';
 import { maintainJointReadiness } from './joint-readiness';
-import { resetSpine as resetSpineGradual } from './reset';
+
 import { enforceMotionRateLimit } from './motion-rate-limit';
+import { resetSpine } from './reset';
 
 export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt?: number): void {
   const deltaTime = dt ?? (1 / 60);
@@ -42,8 +43,8 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     chains.rightArm.poleHint.copyFrom(elbowHint);
   }
 
-  // 武器手のIKターゲットを背中側に行かせない
-  if (charDirs && character.weapon && chains.rightArm.weight > 0) {
+  // 武器手のIKターゲットを背中側に行かせない (スイング中はスキップ: 振りかぶりの頭上位置を阻害しない)
+  if (charDirs && character.weapon && chains.rightArm.weight > 0 && !character.weaponSwing.swinging) {
     const spine = character.combatBones.get('torso');
     if (spine) {
       const spinePos = getWorldPos(spine);
@@ -78,7 +79,8 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
     }
 
     // 毎パス: 自己貫通チェック → IKターゲットを押し戻す → 次パスで再解決
-    if (pass < 2) {
+    // スイング中はスキップ (振りかぶり・打撃の腕軌道を阻害しない)
+    if (pass < 2 && !character.weaponSwing.swinging) {
       resolveBodySelfCollision(character);
     }
   }
@@ -86,9 +88,14 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   keepFootHorizontal(chains.leftLeg.end, character.footBaseWorldRot.left);
   keepFootHorizontal(chains.rightLeg.end, character.footBaseWorldRot.right);
 
-  // スイング中でなければ体幹を徐々にT-poseに戻す (重心も復帰)
+  // IK 解決後: 手首回転で武器方向を制御 + 慣性追従
+  if (character.weapon) {
+    updateWristRotation(character, deltaTime);
+  }
+
+  // スイング中でなければ体幹を徐々にニュートラルに戻す
   if (!character.weaponSwing.swinging) {
-    resetSpineGradual(character);
+    resetSpine(character);
   }
 
   updateWeaponPower(character, dt ?? (1 / 60));
@@ -120,4 +127,5 @@ export function updateHavokCharacter(scene: Scene, character: HavokCharacter, dt
   if (character.debug.enabled) {
     updateDebugVisuals(scene, character.debug, com, lFoot, rFoot, character.root.name);
   }
+
 }
