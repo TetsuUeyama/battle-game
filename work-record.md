@@ -123,3 +123,144 @@
 - **3軸関節制限のキー不一致**: getBoneBaseRot の修正をリバート済み。有効化すると Z 軸制限 -45° で腕が下ろせなくなる。制限値の調整と合わせて再修正が必要
 - 左右ボーンの軸方向反転: 左右で同じ制限値を適用しているが、ミラーされたボーンでは軸の符号が逆の可能性あり → ROM テストで要検証
 - 構えの前後方向: stance.ts フォールバックの facing 方向が正しいか要検証
+
+---
+
+## 2026-05-16
+
+### Unity Uub (Human Basic Motions) Babylon.js 移植 - MVP 完成
+
+Unity プロジェクト `C:\Users\user\My project` の Kevin Iglesias アセット解析、および Babylon.js での再現 Phase 1 (MVP) 完了。
+
+**新ブランチ**: `unity-uub-demo` (weapon-combat-v2 から派生)
+
+**新規ファイル**:
+- `uub-demo-plan.md` — 6 Phase の移植計画
+- `scripts/extract-uub.mjs` — FBX → bone-data.json / motion.json 変換スクリプト（Kevin Iglesias リグ対応、汎用化）
+- `src/app/learning/uub-demo/page.tsx` — Babylon.js ビューア（球+線でスケルトン表示、アイドルアニメ再生）
+- `public/uub/` — オリジナル FBX 配置（.gitignore 対象）
+- `public/uub-data/` — 変換済み JSON
+
+**.gitignore**: `public/uub/` 追加（Kevin Iglesias FREE はライセンス不明のため Git 管理外）
+
+**今回ハマったポイント**:
+- **PreRotation の二重適用**: motion FBX では PreRotation が Lcl Rotation に焼き込まれている（=0）のに、bone-data FBX 由来の PreRotation を毎フレーム掛けて二重回転していた。「足が上を向く・手が後ろ」現象の原因。再生時は `preRotQuat = Identity` で対応
+- **座標系**: Babylon デフォルトの LH と FBX RH の利き手変換でバグりやすかったが、`scene.useRightHandedSystem = true` で RH モードにすることで FBX データを変換なしで使えるようにした（Z 反転や Quaternion mirror が不要に）
+- **抽出スクリプトのバグ**: motion mode で不要な worldPosition 計算がボーン順序エラーで落ちていた → bones mode 専用処理に分離 + 深さ順ソート追加
+
+**Unity アセット解析サマリ**:
+- HumanM/F リグ: 56 ボーン (Generic Rig, "B-" プレフィックス, 独自命名)
+- アニメ 86 クリップ (Idle/Movement/Social, RootMotion 版あり)
+- Animator: 2 レイヤー (Base / Upper + Mask), Trigger `ClearUpper`
+- 特殊機構: `B-spineProxy` (上半身レイヤー再生時の背骨補正)
+- HumanM は Y-up, HumanF は **Z-up** で座標系が異なる
+
+### Phase 2 完成: 複数アニメ + 切替UI
+
+**追加アセット**: Idle02, Idle01-Idle02 (遷移), Walk_Forward, Run_Forward, Sprint_Forward, Jump01 の6本
+
+**追加機能**:
+- 右上にカテゴリ別アニメ選択UI (Idle / Movement)
+- アニメは初回クリック時に遅延ロード + キャッシュ
+- 切替時に frame カウンタを 0 にリセット
+- React の useRef でモーションデータを保持し、Babylon の render observer から参照
+
+### Phase 3 完成: 2 レイヤー + Avatar Mask 移植
+
+**新規ファイル**:
+- `scripts/extract-mask.mjs` — Unity .mask YAML → {boneName: weight} JSON
+- `public/uub-data/masks/upper.json` — Human Body Upper Mask (48 enabled / 8 disabled bones)
+
+**機能**:
+- Base + Upper 別々のアニメ選択
+- Avatar Mask に基づくボーンごとミキシング: weight>0 なら Upper, 否なら Base
+- Base/Upper は独立タイマーで進行 (フレームレート違いを許容)
+- Upper有効ボーンは青色表示 (Color-code mask トグル)
+
+### Phase 4 完成: SpineProxy 機構移植
+
+**実装**:
+- T-pose 時に bone-data preRotation チェーンで B-spine / B-spineProxy のワールド回転を計算
+- rotationOffset = inverse(restProxyRot) × restSpineRot
+- 毎フレーム最終段で B-spine.worldRot を B-spineProxy.worldRot × rotationOffset で上書き
+- B-spine 子孫 (chest, neck, head, arms, hands) を再計算
+
+**ハマったポイント**: 標準 Upper Mask + Kevin Iglesias 標準アニメだと **B-spine と B-spineProxy のワールド回転が完全一致するよう調整されている**ため、SpineProxy ON/OFF で差が見えない (数値検証で確認: 全フレームで diff 0.00°)。
+→ カスタムマスクモード (B-spine をマスクから除外) を追加。Base=Walk, Upper=Idle02 + Spine⤖Base + SpineProxy ON/OFF で姿勢の違いが視覚化されるようにした。
+
+### Phase 5 完成: 床トレッドミル + ブロブ影 + カメラ制御
+
+**追加アセット**: Walk/Run/Sprint/Jump の RM 版 4本を追加コピー & 抽出
+
+**機能**:
+- 床: DynamicTexture でグリッド模様を描画。RM アニメ再生時に B-root.localPosition の delta から UV offset を加算 → 床がスクロール
+- キャラ位置を強制的に原点固定 (B-root の localPosition を 0 に上書き)
+- ブロブ影: 半透明 Plane を Disc 形状で描画。両足距離からスケール、root.y でアルファ/スケール補間 (ジャンプ高 1m で薄く広がる)
+- カメラ: ボタン押下中に alpha を変化させる回転、ボタンクリックで FOV ズーム
+
+**実装の注意**:
+- Babylon の Plane を床に水平にするには `rotation.x = Math.PI / 2`
+- ループ境界でアニメが先頭に戻る瞬間の delta が大きくなるので、閾値 0.3m で異常値検出してスキップ
+
+### HumanF (♀) 追加 + キャラ切替対応
+
+**新規アセット**: HumanF_Model.fbx + Idle01/Idle02/Walk_Forward/[RM版]/Run_Forward[RM]/Jump01
+
+**実装**:
+- CHARACTERS 配列に humanM/humanF を定義、ANIMATIONS に character フィールド追加
+- characterIdx ステート、scene init effect の依存に追加 → 切替時にシーン再構築
+- キャラ切替時に baseAnimIdx/upperAnimIdx を新キャラ用に自動切替 (同名 label を優先)
+- 右上アニメリストを current character でフィルタ
+
+**Z-up問題の調査結果**:
+- HumanF の FBX は GlobalSettings.upAxis=2 (Z-up) と記録されているが、
+  実データ (localPosition) は Y-up と同等の配置 (B-hips Y=96.77cm)
+- preRotation 全て 0、motion 側で全姿勢が baked in
+- **特別な軸補正は不要** で HumanM と同じパイプラインで動作
+
+### 実メッシュ表示 (スキニングメッシュ) 完成
+
+**新規ファイル**:
+- `public/uub-data/mesh-humanM.json` (4.7MB) — 31932 verts, 10644 tris
+- `public/uub-data/mesh-humanF.json` (3.1MB) — 31998 verts, 10666 tris
+- `extract-uub.mjs` に mesh モード追加 — FBX Geometry + Deformer から頂点・法線・スキンウェイト・bind matrix を JSON 化
+
+**実装**:
+- ShaderMaterial + Custom GLSL Vertex/Fragment Shader (Effect.ShadersStore に登録)
+- 56 ボーン分の skinMatrix (= inverseBind × currentWorld) を Matrix[] で uniform 送信
+- 毎フレーム `multiplyToRef` で in-place 計算
+- スティック (球+線) と メッシュ の切替UI
+
+**ハマったポイント**:
+1. `setMatrices` は `Matrix[]` 必須 (`Float32Array` を渡すと内部で `matrix.copyToArray` を呼ぼうとして数値 → 関数なし エラー)
+2. **HumanF の bind matrix だけ Z-up 座標で記録されていた**:
+   - メッシュ頂点・motion: Y-up (bbox Y=0..176cm)
+   - TransformLink: Z-up (B-hips translation Z=96.77 が高さ、回転部分も Y/Z 入替)
+   - bind matrix にだけ `R_x(-90°)` (Z-up→Y-up) を右から掛けて軸統一
+3. 行列の利き手・convention:
+   - Babylon: row-major 格納 + row-vector convention (`v_row * M`)
+   - GLSL: column-major 格納 + column-vector convention (`M * v_col`)
+   - Babylon m[] を直接 GLSL に渡すと自動的に転置されて両 convention で同じ幾何変換になる → 転置不要
+   - 合成順序: skinMatrix = inverseBind × currentWorld (頂点 bind world → bone local → current world)
+
+### Phase 6 完成: フォルダ階層UI (drill-down ナビ)
+
+**実装**:
+- ANIMATIONS の各エントリに `folderPath` 追加 (例: 'Idles', 'Movement/Walk/RootMotion')
+- `browseFolder(folder, anims)` で現在パス直下のサブフォルダ + 直下アニメを取得
+- Base/Upper 各々が独立した `currentFolder` ステートを持ち drill-down 可能
+- 📁 アイコン + パンくず表示 + ← Back ボタン
+- キャラ切替時にフォルダパスをルートにリセット
+
+### 全 Phase 完成 (Unity Uub → Babylon.js 移植)
+1. ✅ Phase 1 (MVP): 表示 + 単一アニメ再生
+2. ✅ Phase 2: 複数アニメ読込 + 切替
+3. ✅ Phase 3: 2 レイヤー + Avatar Mask
+4. ✅ Phase 4: SpineProxy 機構
+5. ✅ Phase 5: 床トレッドミル + ブロブ影 + カメラ
+6. ✅ HumanF (Z-up 問題) + キャラ切替
+7. ✅ 実メッシュ表示 (スキニング、Custom GLSL Shader)
+8. ✅ Phase 6: フォルダ階層UI
+9. ✅ 全アニメ拡充 (118 本: HumanM 全 + HumanF 全 + Masked Poses)
+   - scripts/import-all-anims.mjs で一括 copy/extract/manifest 生成
+   - public/uub-data/animations-manifest.json から動的ロード

@@ -4,3 +4,7 @@ out/
 *.tsbuildinfo
 .env
 .env.local
+
+# Unity Asset Store assets (Kevin Iglesias Human Basic Motions FREE)
+# License unclear for non-Unity use - keep out of git
+public/uub/
