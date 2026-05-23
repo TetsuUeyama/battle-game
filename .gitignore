@@ -8,3 +8,6 @@ out/
 # Unity Asset Store assets (Kevin Iglesias Human Basic Motions FREE)
 # License unclear for non-Unity use - keep out of git
 public/uub/
+
+# Diagnostic output from scripts/blender inspect_* scripts
+tmp/

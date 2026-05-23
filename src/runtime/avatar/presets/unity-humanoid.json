@@ -1,0 +1,36 @@
+{
+  "id": "unity-humanoid",
+  "rigType": "unity-humanoid",
+  "bones": {
+    "Hips": "Hips",
+    "Spine": "Spine",
+    "Chest": "Chest",
+    "UpperChest": "UpperChest",
+    "Neck": "Neck",
+    "Head": "Head",
+
+    "LeftShoulder": "LeftShoulder",
+    "LeftUpperArm": "LeftUpperArm",
+    "LeftLowerArm": "LeftLowerArm",
+    "LeftHand": "LeftHand",
+
+    "RightShoulder": "RightShoulder",
+    "RightUpperArm": "RightUpperArm",
+    "RightLowerArm": "RightLowerArm",
+    "RightHand": "RightHand",
+
+    "LeftUpperLeg": "LeftUpperLeg",
+    "LeftLowerLeg": "LeftLowerLeg",
+    "LeftFoot": "LeftFoot",
+    "LeftToes": "LeftToes",
+
+    "RightUpperLeg": "RightUpperLeg",
+    "RightLowerLeg": "RightLowerLeg",
+    "RightFoot": "RightFoot",
+    "RightToes": "RightToes",
+
+    "LeftEye": "LeftEye",
+    "RightEye": "RightEye",
+    "Jaw": "Jaw"
+  }
+}

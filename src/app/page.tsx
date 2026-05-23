@@ -3,14 +3,9 @@
 import Link from 'next/link';
 
 const pages = [
-  { href: '/battle', title: '3v3 Battle', desc: '3v3チーム戦（Tank/Ranged/Healer/Assassin）' },
-  { href: '/weapon-combat', title: 'Weapon Combat', desc: '武器戦闘（剣・斧・槍+盾・双槌 / 防具破壊・血しぶき）' },
-  { href: '/judo', title: 'Judo', desc: '柔道 CPU対戦（組み手・投げ・寝技・締め）' },
+  { href: '/motion-test', title: 'CPU Arena', desc: '3D格闘ゲーム。CPU同士の自動バトルを観戦できます。' },
   { href: '/water-gun', title: 'Water Gun', desc: '水鉄砲パーティクルFXプロトタイプ（水・血・毒）' },
-  { href: '/battle-royale', title: 'Battle Royale', desc: '108人バトルロイヤル（1発KO・最後の1人まで）' },
-  { href: '/field', title: 'Field Viewer', desc: 'ボクセル地形ビューワー' },
-  { href: '/havok-test', title: 'Havok Test', desc: 'Havok物理キャラクター / 武器装備・構え・スイングモーション確認' },
-  { href: '/weapon-combat-v2', title: 'Weapon Combat v2', desc: 'HavokCharacter対戦 / IK武器物理・AI追尾・攻撃モーション' },
+  { href: '/snake-test', title: 'Snake Retarget Test', desc: 'Mixamo FBX を qm_default リグに retarget したアニメ再生確認' },
 ];
 
 export default function Home() {
