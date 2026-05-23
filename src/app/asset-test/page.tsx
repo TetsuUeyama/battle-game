@@ -50,7 +50,9 @@ export default function AssetTest() {
     const scene = new Scene(engine);
     scene.clearColor = new Color4(0.07, 0.07, 0.14, 1);
 
-    const camera = new ArcRotateCamera('cam', -Math.PI / 2, Math.PI / 2.3, 5, new Vector3(0, 1, 0), scene);
+    // キャラは +Z を向いている。alpha=+π/2 で +Z 側(正面)から見る
+    // (alpha=-π/2 だと背面を映し、左右の手足が反転して見えてしまう)
+    const camera = new ArcRotateCamera('cam', Math.PI / 2, Math.PI / 2.3, 5, new Vector3(0, 1, 0), scene);
     camera.attachControl(canvas, true);
     camera.wheelDeltaPercentage = 0.02;
     camera.minZ = 0.05;
