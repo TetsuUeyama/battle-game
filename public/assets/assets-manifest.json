@@ -1,0 +1,21 @@
+{
+  "generatedAt": "2026-05-24T00:00:00Z",
+  "assets": [
+    {
+      "id": "snake",
+      "sourcePath": "Assets/Characters/Snake.prefab",
+      "glbPath": "/motion-test/snake_hiphop.glb",
+      "animatorPath": "snake/animator.json",
+      "boneMappingPath": "snake/bone-mapping.json",
+      "animationClips": [
+        "Punch",
+        "SnakeHipHop",
+        "Squat",
+        "StarJump",
+        "Twist",
+        "Walk",
+        "Wave"
+      ]
+    }
+  ]
+}

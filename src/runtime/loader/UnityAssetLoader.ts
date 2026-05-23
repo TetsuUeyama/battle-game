@@ -90,7 +90,7 @@ export class UnityAssetLoader {
       );
     }
 
-    const glbUrl = this.baseUrl + entry.glbPath;
+    const glbUrl = this.resolveUrl(entry.glbPath);
     const idx = glbUrl.lastIndexOf("/");
     const rootUrl = glbUrl.substring(0, idx + 1);
     const fileName = glbUrl.substring(idx + 1);
@@ -132,10 +132,22 @@ export class UnityAssetLoader {
   }
 
   private async fetchJson<T>(relativePath: string): Promise<T> {
-    const res = await fetch(this.baseUrl + relativePath);
+    const res = await fetch(this.resolveUrl(relativePath));
     if (!res.ok) {
       throw new Error(`Failed to load ${relativePath}: ${res.status}`);
     }
     return (await res.json()) as T;
+  }
+
+  /**
+   * manifest 内のパスを解決する。`/` 始まりや `http(s)://` の絶対パスは
+   * baseUrl を付けずそのまま使う (共有アセットを参照する場合など)。
+   * それ以外は baseUrl からの相対パスとして扱う。
+   */
+  private resolveUrl(path: string): string {
+    if (/^(https?:)?\/\//.test(path) || path.startsWith("/")) {
+      return path;
+    }
+    return this.baseUrl + path;
   }
 }

@@ -1,0 +1,103 @@
+{
+  "name": "SnakeController",
+  "parameters": [
+    { "name": "speed", "type": "Float", "defaultFloat": 0, "defaultInt": 0, "defaultBool": false },
+    { "name": "dance", "type": "Bool", "defaultFloat": 0, "defaultInt": 0, "defaultBool": false },
+    { "name": "punch", "type": "Trigger", "defaultFloat": 0, "defaultInt": 0, "defaultBool": false }
+  ],
+  "layers": [
+    {
+      "name": "Base Layer",
+      "defaultWeight": 1,
+      "defaultState": "Idle",
+      "states": [
+        {
+          "name": "Idle",
+          "clip": "Wave",
+          "speed": 1,
+          "loop": true,
+          "transitions": [
+            {
+              "destination": "Walk",
+              "hasExitTime": false,
+              "exitTime": 0,
+              "duration": 0.25,
+              "conditions": [
+                { "parameter": "speed", "mode": "Greater", "threshold": 0.1 }
+              ]
+            },
+            {
+              "destination": "Dance",
+              "hasExitTime": false,
+              "exitTime": 0,
+              "duration": 0.3,
+              "conditions": [
+                { "parameter": "dance", "mode": "If", "threshold": 0 }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Walk",
+          "clip": "Walk",
+          "speed": 1,
+          "loop": true,
+          "transitions": [
+            {
+              "destination": "Idle",
+              "hasExitTime": false,
+              "exitTime": 0,
+              "duration": 0.25,
+              "conditions": [
+                { "parameter": "speed", "mode": "Less", "threshold": 0.1 }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Dance",
+          "clip": "SnakeHipHop",
+          "speed": 1,
+          "loop": true,
+          "transitions": [
+            {
+              "destination": "Idle",
+              "hasExitTime": false,
+              "exitTime": 0,
+              "duration": 0.3,
+              "conditions": [
+                { "parameter": "dance", "mode": "IfNot", "threshold": 0 }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Punch",
+          "clip": "Punch",
+          "speed": 1,
+          "loop": false,
+          "transitions": [
+            {
+              "destination": "Idle",
+              "hasExitTime": true,
+              "exitTime": 0.85,
+              "duration": 0.2,
+              "conditions": []
+            }
+          ]
+        }
+      ],
+      "anyStateTransitions": [
+        {
+          "destination": "Punch",
+          "hasExitTime": false,
+          "exitTime": 0,
+          "duration": 0.1,
+          "conditions": [
+            { "parameter": "punch", "mode": "If", "threshold": 0 }
+          ]
+        }
+      ]
+    }
+  ]
+}

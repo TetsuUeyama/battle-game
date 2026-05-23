@@ -6,6 +6,7 @@ const pages = [
   { href: '/motion-test', title: 'CPU Arena', desc: '3D格闘ゲーム。CPU同士の自動バトルを観戦できます。' },
   { href: '/water-gun', title: 'Water Gun', desc: '水鉄砲パーティクルFXプロトタイプ（水・血・毒）' },
   { href: '/snake-test', title: 'Snake Retarget Test', desc: 'Mixamo FBX を qm_default リグに retarget したアニメ再生確認' },
+  { href: '/asset-test', title: 'Asset Pipeline', desc: 'Unityアセット(GLB+animator+bone-mapping)をローダー→Animatorで再生' },
 ];
 
 export default function Home() {

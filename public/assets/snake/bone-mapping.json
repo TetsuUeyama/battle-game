@@ -1,0 +1,30 @@
+{
+  "id": "snake-qm",
+  "rigType": "mixamo",
+  "entries": [
+    { "standardName": "Hips", "sourceName": "Hips" },
+    { "standardName": "Spine", "sourceName": "Spine" },
+    { "standardName": "Chest", "sourceName": "Spine1" },
+    { "standardName": "UpperChest", "sourceName": "Spine2" },
+    { "standardName": "Neck", "sourceName": "Neck" },
+    { "standardName": "Head", "sourceName": "Head" },
+
+    { "standardName": "LeftShoulder", "sourceName": "LeftShoulder" },
+    { "standardName": "LeftUpperArm", "sourceName": "LeftArm" },
+    { "standardName": "LeftLowerArm", "sourceName": "LeftForeArm" },
+    { "standardName": "LeftHand", "sourceName": "LeftHand" },
+
+    { "standardName": "RightShoulder", "sourceName": "RightShoulder" },
+    { "standardName": "RightUpperArm", "sourceName": "RightArm" },
+    { "standardName": "RightLowerArm", "sourceName": "RightForeArm" },
+    { "standardName": "RightHand", "sourceName": "RightHand" },
+
+    { "standardName": "LeftUpperLeg", "sourceName": "LeftUpLeg" },
+    { "standardName": "LeftLowerLeg", "sourceName": "LeftLeg" },
+    { "standardName": "LeftFoot", "sourceName": "LeftFoot" },
+
+    { "standardName": "RightUpperLeg", "sourceName": "RightUpLeg" },
+    { "standardName": "RightLowerLeg", "sourceName": "RightLeg" },
+    { "standardName": "RightFoot", "sourceName": "RightFoot" }
+  ]
+}
