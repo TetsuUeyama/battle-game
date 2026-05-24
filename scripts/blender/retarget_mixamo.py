@@ -1,13 +1,20 @@
 """Retarget a Mixamo FBX animation onto qm_default.glb's skeleton and export GLB.
 
-Method:
+Method (rest-difference-corrected world rotation bake):
   1. Import qm_default.glb (target: skeleton + mesh)
   2. Import Snake Hip Hop Dance.fbx (source: Mixamo skeleton + animation)
   3. Strip 'mixamorig:' prefix from source bones
-  4. Add Copy Rotation (world) constraint per target bone -> same-named source bone
-  5. Copy Location constraint on Hips (with /100 scale via parent scale)
-  6. Bake target armature animation across source frame range
-  7. Delete source armature, rename action, export GLB
+  4. Per matched bone compute correction C = restS_world^-1 @ restT_world
+     (restS/restT = source/target rest world ROTATION). This cancels the
+     bind-pose roll difference between the Mixamo source rig and the qm rig.
+  5. For every frame, set target bone world rotation = sourceWorldRot @ C,
+     copy Hips world location (scaled), keyframe. (No constraints/bake op.)
+  6. Export GLB.
+
+Why C is needed: qm's arm/leg bones are rolled 180deg about their length vs
+raw Mixamo. A plain "Copy Rotation WORLD" (targetWorld = sourceWorld) ignores
+this, twisting hands/feet 180deg (palms/toes point backward). Hips/Spine rests
+match so they were unaffected. See tmp/retarget_diag.json for the measurement.
 
 Usage:
   blender --background --python scripts/blender/retarget_mixamo.py
@@ -16,7 +23,7 @@ import bpy
 import os
 import sys
 import math
-import mathutils
+from mathutils import Matrix, Vector
 
 FBX_PATH = r"C:\Users\user\developsecond\game-assets\motion\Snake Hip Hop Dance.fbx"
 GLB_PATH = r"C:\Users\user\developsecond\contactform\public\demo\qm_default.glb"
@@ -43,10 +50,6 @@ def find_armature(exclude=None):
     return None
 
 
-def find_armatures_all():
-    return [o for o in bpy.data.objects if o.type == "ARMATURE"]
-
-
 def strip_prefix(arm_obj, prefix="mixamorig:"):
     for b in arm_obj.data.bones:
         if b.name.startswith(prefix):
@@ -54,146 +57,156 @@ def strip_prefix(arm_obj, prefix="mixamorig:"):
 
 
 def get_action_for(arm_obj):
-    """Get the (first) action driving this armature, regardless of Blender version."""
     if arm_obj.animation_data and arm_obj.animation_data.action:
         return arm_obj.animation_data.action
-    # Fallback: pick any
     for a in bpy.data.actions:
         return a
     return None
 
 
-def collect_fcurves(action):
-    fcs = []
-    if hasattr(action, "fcurves") and len(getattr(action, "fcurves", [])) > 0:
-        fcs.extend(list(action.fcurves))
-        return fcs
-    for layer in getattr(action, "layers", []):
-        for strip in getattr(layer, "strips", []):
-            for cb in getattr(strip, "channelbags", []):
-                fcs.extend(list(getattr(cb, "fcurves", [])))
-    return fcs
+def rot3(m):
+    """Pure (scale-removed) 3x3 rotation from a 4x4 matrix."""
+    r = m.to_3x3()
+    for i in range(3):
+        c = r.col[i]
+        n = c.length or 1.0
+        r[0][i], r[1][i], r[2][i] = c[0] / n, c[1] / n, c[2] / n
+    return r
+
+
+def ordered_bones(arm_obj, names):
+    """Return matched bone names sorted parent-first (so children read posed parents)."""
+    depth = {}
+    for n in names:
+        b = arm_obj.data.bones.get(n)
+        d = 0
+        while b and b.parent:
+            d += 1
+            b = b.parent
+        depth[n] = d
+    return sorted(names, key=lambda n: depth[n])
 
 
 def main():
     clear_scene()
 
-    # 1. Import target GLB
     print(f"[1] Import target GLB: {GLB_PATH}")
     bpy.ops.import_scene.gltf(filepath=GLB_PATH)
     target = find_armature()
     if not target:
         raise RuntimeError("No armature in target GLB")
     target.name = "TargetArmature"
-    target_bones = set(b.name for b in target.data.bones)
-    print(f"    target bones: {len(target_bones)}")
-
-    # Remove existing actions from target so we start clean for the new bake
     if target.animation_data:
         target.animation_data.action = None
 
-    # 2. Import source FBX
-    before = set(o.name for o in bpy.data.objects)
     print(f"[2] Import source FBX: {FBX_PATH}")
+    before = set(o.name for o in bpy.data.objects)
     bpy.ops.import_scene.fbx(
         filepath=FBX_PATH,
-        automatic_bone_orientation=True,  # Mixamo の元 local 軸を復元（肩/股の捩じれ防止）
-        ignore_leaf_bones=True,  # Mixamo の HeadTop_End 等の leaf を除外
+        automatic_bone_orientation=True,
+        ignore_leaf_bones=True,
     )
     after = set(o.name for o in bpy.data.objects)
-    new_objs = [bpy.data.objects[n] for n in (after - before)]
-    source = next((o for o in new_objs if o.type == "ARMATURE"), None)
+    source = next((bpy.data.objects[n] for n in (after - before)
+                   if bpy.data.objects[n].type == "ARMATURE"), None)
     if not source:
         raise RuntimeError("No armature in source FBX")
     source.name = "SourceArmature"
 
-    # 3. Strip mixamorig: prefix on source bones
     print("[3] Strip mixamorig: prefix")
     strip_prefix(source)
+    source.scale = (SCALE_FBX_TO_GLB, SCALE_FBX_TO_GLB, SCALE_FBX_TO_GLB)
 
-    # Confirm action bound to source
     src_action = get_action_for(source)
     if not src_action:
         raise RuntimeError("Source FBX has no action")
-    fcs = collect_fcurves(src_action)
     frame_min = math.floor(src_action.frame_range[0])
     frame_max = math.ceil(src_action.frame_range[1])
-    print(f"    source action: {src_action.name}, frames {frame_min}-{frame_max}, fcurves={len(fcs)}")
+    print(f"    source action: {src_action.name}, frames {frame_min}-{frame_max}")
 
-    # 4. Add Copy Constraints on target bones (pose mode)
-    print("[4] Add Copy constraints")
+    # Matched bones (same name in both rigs)
+    src_names = set(b.name for b in source.data.bones)
+    matched = [b.name for b in target.data.bones if b.name in src_names]
+    skipped = [b.name for b in target.data.bones if b.name not in src_names]
+    print(f"[4] matched={len(matched)} skipped={skipped}")
+
+    bpy.context.view_layer.update()
+    tw = target.matrix_world
+    sw = source.matrix_world
+    twr = rot3(tw)
+    swr = rot3(sw)
+    twr_inv = twr.inverted()
+
+    # Correction C_b = restS_world_rot^-1 @ restT_world_rot  (world rotation)
+    C = {}
+    for name in matched:
+        tb = target.data.bones[name]
+        sb = source.data.bones[name]
+        restT = twr @ rot3(tb.matrix_local.to_4x4())
+        restS = swr @ rot3(sb.matrix_local.to_4x4())
+        C[name] = restS.inverted() @ restT
+
+    order = ordered_bones(target, matched)
+    hips = "Hips"
+
+    # Ensure quaternion rotation mode and clear any pose
     bpy.context.view_layer.objects.active = target
     bpy.ops.object.mode_set(mode="POSE")
-    matched = 0
-    skipped = []
     for pb in target.pose.bones:
-        if pb.name not in (b.name for b in source.data.bones):
-            skipped.append(pb.name)
-            continue
-        # Copy Rotation in world space
-        cr = pb.constraints.new("COPY_ROTATION")
-        cr.target = source
-        cr.subtarget = pb.name
-        cr.target_space = "WORLD"
-        cr.owner_space = "WORLD"
-        matched += 1
-        # Copy Location for Hips only (with scale)
-        if pb.name == "Hips":
-            cl = pb.constraints.new("COPY_LOCATION")
-            cl.target = source
-            cl.subtarget = pb.name
-            cl.target_space = "WORLD"
-            cl.owner_space = "WORLD"
-            # Approximate cm -> m: ARP-style use_offset trick is fragile; instead
-            # we will scale source armature object to compensate
-    bpy.ops.object.mode_set(mode="OBJECT")
-    print(f"    matched={matched}, skipped (no match)={len(skipped)}: {skipped[:8]}")
+        pb.rotation_mode = "QUATERNION"
+        pb.matrix_basis = Matrix()
 
-    # 4b. Scale source armature so that world positions match target scale.
-    #     FBX is in cm, target GLB in m. Scale 0.01.
-    source.scale = (SCALE_FBX_TO_GLB, SCALE_FBX_TO_GLB, SCALE_FBX_TO_GLB)
-    print(f"    source armature scaled to {SCALE_FBX_TO_GLB}")
+    scene = bpy.context.scene
+    scene.frame_start = frame_min
+    scene.frame_end = frame_max
 
-    # 5. Bake animation on target armature
-    print(f"[5] Bake frames {frame_min}-{frame_max}")
-    bpy.context.scene.frame_start = frame_min
-    bpy.context.scene.frame_end = frame_max
-    bpy.context.view_layer.objects.active = target
-    bpy.ops.object.select_all(action="DESELECT")
-    target.select_set(True)
-    bpy.ops.object.mode_set(mode="POSE")
-    # Select all pose bones for bake
-    bpy.ops.pose.select_all(action="SELECT")
-    bpy.ops.nla.bake(
-        frame_start=frame_min,
-        frame_end=frame_max,
-        step=1,
-        only_selected=True,
-        visual_keying=True,
-        clear_constraints=True,
-        clear_parents=False,
-        use_current_action=False,
-        bake_types={"POSE"},
-    )
+    print(f"[5] Bake (corrected world rotation) frames {frame_min}-{frame_max}")
+    for f in range(frame_min, frame_max + 1):
+        scene.frame_set(f)
+        bpy.context.view_layer.update()
+
+        # read source world rotations at this frame
+        src_rot = {}
+        for name in matched:
+            pbS = source.pose.bones[name]
+            src_rot[name] = rot3(sw @ pbS.matrix)
+        hips_loc_world = (sw @ source.pose.bones[hips].matrix).to_translation()
+
+        for name in order:
+            pbT = target.pose.bones[name]
+            desired_world = src_rot[name] @ C[name]
+            arm_rot = twr_inv @ desired_world  # into target armature space
+            loc = pbT.matrix.to_translation()
+            pbT.matrix = Matrix.Translation(loc) @ arm_rot.to_4x4()
+            bpy.context.view_layer.update()
+
+        # Hips world location (scaled source already 0.01)
+        pbH = target.pose.bones[hips]
+        loc_arm = tw.inverted() @ hips_loc_world
+        pbH.matrix = Matrix.Translation(loc_arm) @ rot3(pbH.matrix).to_4x4()
+        bpy.context.view_layer.update()
+
+        # keyframe
+        for name in matched:
+            pbT = target.pose.bones[name]
+            pbT.keyframe_insert("rotation_quaternion", frame=f)
+        pbH.keyframe_insert("location", frame=f)
+
     bpy.ops.object.mode_set(mode="OBJECT")
 
-    # Rename baked action
     if target.animation_data and target.animation_data.action:
         target.animation_data.action.name = ACTION_NAME
         print(f"    baked action -> {ACTION_NAME}")
     else:
-        print("    WARNING: no action bound after bake")
+        print("    WARNING: no action after bake")
 
-    # 6. Delete source armature
     print("[6] Delete source armature")
     bpy.ops.object.select_all(action="DESELECT")
     source.select_set(True)
     bpy.ops.object.delete(use_global=False)
 
-    # 7. Export GLB
     print(f"[7] Export GLB: {OUT_GLB}")
     os.makedirs(os.path.dirname(OUT_GLB), exist_ok=True)
-    # Select target armature + its children mesh
     bpy.ops.object.select_all(action="DESELECT")
     target.select_set(True)
     for child in target.children_recursive:
