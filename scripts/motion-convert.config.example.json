@@ -1,0 +1,15 @@
+{
+  "assetId": "qmdancer",
+  "targetRig": "public/motion-test/qm_default_original.glb",
+  "rigPreset": "mixamo",
+  "scaleFbxToGlb": 0.01,
+  "glbOut": "public/motion-test/qmdancer.glb",
+  "assetsDir": "public/assets",
+  "sourceLabel": "Mixamo",
+  "defaultClip": "Idle",
+  "clips": [
+    { "name": "Idle", "fbx": "C:/Users/user/developsecond/game-assets/motion/Idle.fbx", "loop": true },
+    { "name": "HipHop", "fbx": "C:/Users/user/developsecond/game-assets/motion/Hip Hop Dancing.fbx", "loop": true },
+    { "name": "Jump", "fbx": "C:/Users/user/developsecond/game-assets/motion/Jump.fbx", "loop": false }
+  ]
+}
