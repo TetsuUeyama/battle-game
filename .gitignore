@@ -11,3 +11,6 @@ public/uub/
 
 # Diagnostic output from scripts/blender inspect_* scripts
 tmp/
+
+# マイキャラクター保存 (Phase 7-4, ローカルファイル保存)
+/data/
